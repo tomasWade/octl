@@ -1,0 +1,43 @@
+# Go
+*.exe
+*.test
+*.out
+octl
+tmp/
+
+# Node (from opencode plugins)
+node_modules/
+# 根目录 node_modules symlink（git 视为文件，带斜杠规则不命中）
+/node_modules
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Swarm
+.swarm/
+
+# Worktrees
+.worktree/
+.worktrees/
+
+# Opencode project config
+.opencode/
+
+# Worktree bun test symlink
+internal/node_modules
+
+# Bun workspace
+bunfig.toml
+plugin/bunfig.toml
+
+# Test backup remnants
+*.bak
+*.bak2
+.donghuangzhong.tsv
