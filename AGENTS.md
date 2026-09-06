@@ -244,7 +244,7 @@ go test -run TestRealDBSchema
 ### 语言
 
 - 源码注释以中文为主，代码标识符、类型名、JSON 字段名使用英文。
-- 文档（README、docs）以中文为主。
+- 文档（README、docs）以中文为主；`README.en.md` 为英文版，**改动 README.md 的结构性内容（特性/章节/命令示例）时必须同步更新 README.en.md**（纯措辞微调可不跟）。
 
 ### 包组织
 
