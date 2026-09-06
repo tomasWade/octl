@@ -1,0 +1,22 @@
+#!/bin/bash
+# pre-push 钩子：github remote 只允许推送 main 分支和 tags。
+# 防止误推私有 master 历史（--all / --mirror / 显式 refspec 一律拦截）。
+#
+# 安装：cp scripts/hooks/pre-push .git/hooks/pre-push && chmod +x .git/hooks/pre-push
+# （钩子不随 clone 传播，新机器 clone 后需重装）
+
+remote="$1"
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+  [ -z "${local_ref}${remote_ref}" ] && continue
+  case "$remote_ref" in
+    refs/heads/main|refs/tags/*) ;;
+    *)
+      echo "[pre-push] 已拒绝：向 $remote 推送 $remote_ref" >&2
+      echo "[pre-push] github 只允许 refs/heads/main 和 refs/tags/*（私有历史保护）" >&2
+      exit 1
+      ;;
+  esac
+done
+
+exit 0
