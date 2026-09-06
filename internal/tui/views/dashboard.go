@@ -548,7 +548,8 @@ func (m DashboardModel) handleTreeNav(msg tea.KeyMsg) (DashboardModel, tea.Cmd) 
 
 	case "n", "N":
 		node := m.visible[m.cursor]
-		if node.Type == NodeProject {
+		switch node.Type {
+		case NodeProject:
 			m.mode = modeInput
 			m.inputBuf = ""
 			dir := node.Project.Worktree
@@ -557,7 +558,7 @@ func (m DashboardModel) handleTreeNav(msg tea.KeyMsg) (DashboardModel, tea.Cmd) 
 			}
 			m.inputDir = dir
 			m.feedback = ""
-		} else if node.Type == NodeSession {
+		case NodeSession:
 			m.mode = modeInput
 			m.inputBuf = ""
 			m.inputDir = node.Session.Directory
@@ -780,9 +781,10 @@ func buildTreeScrollBar(treeHeight, totalRows, start int) []string {
 // renderRow 根据节点类型分派到对应的渲染器。
 func (m DashboardModel) renderRow(node *TreeNode, isCursor bool, colTitle, colAgent, colCost, colUpdated, colStatus int) string {
 	multiSelected := false
-	if node.Type == NodeSession {
+	switch node.Type {
+	case NodeSession:
 		multiSelected = m.selected[node.Session.ID]
-	} else if node.Type == NodeProject {
+	case NodeProject:
 		multiSelected = hasSelectedDescendant(node, m.selected)
 	}
 	if node.Type == NodeProject {
@@ -936,28 +938,28 @@ func (m DashboardModel) confirmView() string {
 	var sb strings.Builder
 	if m.pendingProjectID != "" {
 		if m.pendingProjectID == "global" {
-			sb.WriteString(fmt.Sprintf("Remove %d session(s) from the global project?\n\nThe global project itself cannot be deleted.\n\n", len(m.pendingSessionIDs)))
+			fmt.Fprintf(&sb, "Remove %d session(s) from the global project?\n\nThe global project itself cannot be deleted.\n\n", len(m.pendingSessionIDs))
 		} else {
-			sb.WriteString(fmt.Sprintf("Are you sure you want to %s this project and its %d sessions?\n\n", actionVerb, len(m.pendingSessionIDs)))
+			fmt.Fprintf(&sb, "Are you sure you want to %s this project and its %d sessions?\n\n", actionVerb, len(m.pendingSessionIDs))
 		}
 	} else if len(m.pendingSessionIDs) == 1 {
-		sb.WriteString(fmt.Sprintf("Are you sure you want to %s this session?\n\n", actionVerb))
+		fmt.Fprintf(&sb, "Are you sure you want to %s this session?\n\n", actionVerb)
 		title := m.sessionTitle(m.pendingSessionIDs[0])
 		if title == "" {
 			title = "(no title)"
 		}
 		title = truncateRunes(title, 47)
-		sb.WriteString(fmt.Sprintf("  %s\n", title))
-		sb.WriteString(fmt.Sprintf("  ID: %s\n\n", abbreviateID(m.pendingSessionIDs[0])))
+		fmt.Fprintf(&sb, "  %s\n", title)
+		fmt.Fprintf(&sb, "  ID: %s\n\n", abbreviateID(m.pendingSessionIDs[0]))
 	} else {
-		sb.WriteString(fmt.Sprintf("Are you sure you want to %s %d sessions?\n\n", actionVerb, len(m.pendingSessionIDs)))
+		fmt.Fprintf(&sb, "Are you sure you want to %s %d sessions?\n\n", actionVerb, len(m.pendingSessionIDs))
 		for _, id := range m.pendingSessionIDs {
 			label := m.sessionTitle(id)
 			if label == "" {
 				label = "(no title)"
 			}
 			label = truncateRunes(label, 47)
-			sb.WriteString(fmt.Sprintf("  %s  (%s)\n", label, abbreviateID(id)))
+			fmt.Fprintf(&sb, "  %s  (%s)\n", label, abbreviateID(id))
 		}
 		sb.WriteString("\n")
 	}
@@ -985,19 +987,17 @@ func (m DashboardModel) progressView() string {
 	}
 
 	var sb strings.Builder
-	sb.WriteString(
-		fmt.Sprintf("Operation complete: %d succeeded, %d failed\n\n",
-			m.progress.Succeeded, m.progress.Failed),
-	)
+	fmt.Fprintf(&sb, "Operation complete: %d succeeded, %d failed\n\n",
+		m.progress.Succeeded, m.progress.Failed)
 
 	for _, r := range m.progress.Results {
 		icon := "✓"
 		if !r.Success {
 			icon = "✗"
 		}
-		sb.WriteString(fmt.Sprintf(" %s  %s\n", icon, r.SessionID))
+		fmt.Fprintf(&sb, " %s  %s\n", icon, r.SessionID)
 		if !r.Success && r.Error != "" {
-			sb.WriteString(fmt.Sprintf("    └ %s\n", r.Error))
+			fmt.Fprintf(&sb, "    └ %s\n", r.Error)
 		}
 	}
 
@@ -1021,12 +1021,12 @@ func (m DashboardModel) buildMessageContent(session types.Session, contentWidth 
 	if title == "" {
 		title = "(no title)"
 	}
-	sb.WriteString(fmt.Sprintf("Conversation — %s\n", title))
+	fmt.Fprintf(&sb, "Conversation — %s\n", title)
 	dir := session.Directory
 	if dir == "" {
 		dir = "(unknown)"
 	}
-	sb.WriteString(fmt.Sprintf("Directory: %s\n", dir))
+	fmt.Fprintf(&sb, "Directory: %s\n", dir)
 	if len(m.convMsgs) > 0 && m.msgIndex >= 0 && m.msgIndex < len(m.convMsgs) {
 		roleLabel := m.convMsgs[m.msgIndex].role
 		if roleLabel == "" {
@@ -1037,8 +1037,8 @@ func (m DashboardModel) buildMessageContent(session types.Session, contentWidth 
 			roleDisplay = "assistant"
 		}
 		ts := time.UnixMilli(m.convMsgs[m.msgIndex].timeCreated).Format("2006-01-02 15:04:05")
-		sb.WriteString(fmt.Sprintf("─── Message %d/%d [%s] — %s ───\n",
-			m.msgIndex+1, len(m.convMsgs), roleDisplay, ts))
+		fmt.Fprintf(&sb, "─── Message %d/%d [%s] — %s ───\n",
+			m.msgIndex+1, len(m.convMsgs), roleDisplay, ts)
 		msgText := m.convMsgs[m.msgIndex].text
 		if roleLabel != "user" && msgText != "" {
 			rendered, err := glamour.Render(msgText, "dark")
@@ -1154,9 +1154,7 @@ func (m DashboardModel) messageView() string {
 		display = append(display, "")
 	}
 
-	for _, line := range allLines[start:end] {
-		display = append(display, line)
-	}
+	display = append(display, allLines[start:end]...)
 
 	if end < totalLines {
 		display = append(display, lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render("↓ ..."))
@@ -1203,15 +1201,15 @@ func (m DashboardModel) inputView() string {
 	var sb strings.Builder
 	if m.forkSessionID != "" {
 		sb.WriteString("Fork Session\n")
-		sb.WriteString(fmt.Sprintf("Source: %s\n\n", abbreviateID(m.forkSessionID)))
+		fmt.Fprintf(&sb, "Source: %s\n\n", abbreviateID(m.forkSessionID))
 		sb.WriteString("Enter message for forked session:\n\n")
 	} else if m.sendToSessionID != "" {
 		sb.WriteString("Send Message\n")
-		sb.WriteString(fmt.Sprintf("To: %s\n\n", abbreviateID(m.sendToSessionID)))
+		fmt.Fprintf(&sb, "To: %s\n\n", abbreviateID(m.sendToSessionID))
 		sb.WriteString("Enter message:\n\n")
 	} else {
 		sb.WriteString("New Session\n")
-		sb.WriteString(fmt.Sprintf("Directory: %s\n\n", m.inputDir))
+		fmt.Fprintf(&sb, "Directory: %s\n\n", m.inputDir)
 		sb.WriteString("Enter first message:\n\n")
 	}
 
@@ -1437,11 +1435,6 @@ var headerStyle = lipgloss.NewStyle().
 	PaddingTop(0).
 	PaddingBottom(0)
 
-// baseStyle 使用普通边框包裹内容。与管理视图和统计视图共享。
-var baseStyle = lipgloss.NewStyle().
-	BorderStyle(lipgloss.NormalBorder()).
-	BorderForeground(lipgloss.Color("240"))
-
 // selectedStyle 用于高亮当前光标所在的树行（只改背景，保留行内状态颜色）。
 var selectedStyle = lipgloss.NewStyle().
 	Background(lipgloss.Color("236"))
@@ -1587,12 +1580,12 @@ func (m *DashboardModel) rebuildMsgCache() {
 			if title == "" {
 				title = "(no title)"
 			}
-			sb.WriteString(fmt.Sprintf("Conversation — %s\n", title))
+			fmt.Fprintf(&sb, "Conversation — %s\n", title)
 			dir := node.Session.Directory
 			if dir == "" {
 				dir = "(unknown)"
 			}
-			sb.WriteString(fmt.Sprintf("Directory: %s\n", dir))
+			fmt.Fprintf(&sb, "Directory: %s\n", dir)
 		}
 	}
 	roleLabel := m.convMsgs[m.msgIndex].role
@@ -1604,8 +1597,8 @@ func (m *DashboardModel) rebuildMsgCache() {
 		roleDisplay = "assistant"
 	}
 	ts := time.UnixMilli(m.convMsgs[m.msgIndex].timeCreated).Format("2006-01-02 15:04:05")
-	sb.WriteString(fmt.Sprintf("─── Message %d/%d [%s] — %s ───\n",
-		m.msgIndex+1, len(m.convMsgs), roleDisplay, ts))
+	fmt.Fprintf(&sb, "─── Message %d/%d [%s] — %s ───\n",
+		m.msgIndex+1, len(m.convMsgs), roleDisplay, ts)
 
 	// 为助手消息渲染 markdown
 	msgText := m.convMsgs[m.msgIndex].text

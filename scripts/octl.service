@@ -1,0 +1,26 @@
+# octl daemon 的 systemd 用户服务示例（无需 root）
+#
+# 安装：
+#   mkdir -p ~/.config/systemd/user
+#   cp scripts/octl.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now octl
+#
+# 常用：
+#   systemctl --user status octl     # 状态
+#   journalctl --user -u octl -f     # 日志
+#
+# 说明：ExecStart 默认指向 go install 的路径（~/go/bin/octl）；
+# 二进制在别处（如 ~/bin）请自行修改。
+
+[Unit]
+Description=octl daemon (opencode session manager)
+Documentation=https://github.com/tomasWade/octl
+
+[Service]
+ExecStart=%h/go/bin/octl --daemon
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

@@ -75,7 +75,7 @@ func runActionDelete(args []string) int {
 	assumeYes := fs.Bool("yes", false, "skip the confirmation prompt")
 	fs.Usage = func() { printActionUsage(fs.Output(), "delete") }
 	flags, positional := reorderArgs(args, actionValueFlags)
-	fs.Parse(flags)
+	_ = fs.Parse(flags) // ExitOnError：出错时已 os.Exit
 
 	if len(positional) < 1 {
 		fmt.Fprintln(os.Stderr, "缺少 <sessionId> 参数（支持模糊匹配，可多个）")
@@ -124,7 +124,7 @@ func runActionCreate(args []string) int {
 	dir := fs.String("dir", "", "working directory for the new session (default: current directory)")
 	fs.Usage = func() { printActionUsage(fs.Output(), "create") }
 	flags, positional := reorderArgs(args, actionValueFlags)
-	fs.Parse(flags)
+	_ = fs.Parse(flags) // ExitOnError：出错时已 os.Exit
 
 	if len(positional) != 1 || strings.TrimSpace(positional[0]) == "" {
 		fmt.Fprintln(os.Stderr, "create 需要恰好一个 <message> 参数（含空格时请加引号）")
@@ -161,7 +161,7 @@ func runActionForkSend(verb string, args []string) int {
 	dir := fs.String("dir", "", "working directory (default: the session's directory from DB)")
 	fs.Usage = func() { printActionUsage(fs.Output(), verb) }
 	flags, positional := reorderArgs(args, actionValueFlags)
-	fs.Parse(flags)
+	_ = fs.Parse(flags) // ExitOnError：出错时已 os.Exit
 
 	if len(positional) != 2 || strings.TrimSpace(positional[0]) == "" || strings.TrimSpace(positional[1]) == "" {
 		fmt.Fprintf(os.Stderr, "%s 需要 <sessionId> 与 <message> 两个参数（message 含空格时请加引号）\n", verb)
@@ -342,4 +342,3 @@ Flags:
 退出码：0 成功（含用户主动取消）；1 运行错误；2 用法错误
 `)
 }
-

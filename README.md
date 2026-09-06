@@ -6,25 +6,114 @@
 
 A terminal TUI + daemon for browsing and managing your local [opencode](https://opencode.ai) sessions — real-time status, favorites, stats and daily digests. Fully offline; SQLite is only ever opened read-only.
 
-octl 是一个终端 TUI 工具，配合独立 daemon 进程，让你在终端里浏览和管理本机 opencode 的会话（session）。
+octl 让你在单个终端里总览本机全部 opencode 会话：谁在跑、谁在等权限确认、谁出错了、今天都做了什么。
 
-> ⚠️ octl 分为 **daemon** 和 **TUI** 两个进程。所有数据读取、状态推导、管理操作都集中在 daemon；TUI 和 sidebar 插件只做渲染，通过 Unix socket 接收 daemon 推送的完整视图数据。
+## ✨ 特性
 
-## 安装
+- **🧩 opencode sidebar 集成（招牌特性）** — 不用离开正在写的对话，opencode TUI 右侧常驻一块实时面板：**全部 project 的 session 树**、聚合状态点（子会话出问题父会话立刻变 🟡）、状态 chip 过滤、两级折叠，全程鼠标操作——点标题收藏（★）、点 ↗ 直接跳到该 session 所在的 tmux pane、点 ✕ 删除。哪个 agent 在等你确认权限，扫一眼就知道
+- **终端 TUI 管理台** — project / session 树形视图，多选批量删除 / 导出、收藏（★ 持久化）、新建 / fork / 发消息，全部经 daemon 走 opencode CLI
+- **实时状态总览** — BUSY / RETRY / IDLE / PERMISSION / ERROR / ARCHIVED 实时推送；权限等待（🟡）一眼可见，不再有被遗忘的 agent
+- **📊 用量统计** — 总 session 数 / 活跃数 / 费用 / Token
+- **📅 日报底片** — `octl report` 落盘机械事实层（活跃线 + 用户消息骨架 + 删除讣告），供 skill / agent 做叙事总结（消费方示例：[examples/skills](examples/skills/六耳/SKILL.md)）
+- **🔒 安全** — 完全离线；SQLite 以 `?mode=ro` 只读打开；删除走 `opencode session delete`，不直接写库
+
+opencode 内嵌的 sidebar 面板（真实录制——「收藏 / 全部」tab 切换、收藏列表、点击 ↗ 一键跳转到「跑 e2e 测试」所在 的 tmux 窗口）：
+
+![octl sidebar demo](docs/img/demo-sidebar.gif)
+
+独立的终端管理台（`octl`，动图演示）：
+
+![octl TUI demo](docs/img/demo.gif)
+
+## 🚀 快速上手
 
 ```bash
 go install github.com/tomasWade/octl@latest
+octl plugins --output=~/.config/opencode/plugins/   # 生成 opencode 插件（推荐）
+octl --daemon &                                     # 启动守护进程
+octl                                                # 打开 TUI
 ```
 
-或从源码构建：
+要求：Go 1.25+，本机已有 opencode 数据（`~/.local/share/opencode/opencode.db`）。sidebar 面板还需在 `~/.config/opencode/tui.json` 注册插件（见下文「安装 opencode 插件」）。
 
-```bash
-git clone https://github.com/tomasWade/octl
-cd octl
-go build -o octl .
+没有 Go 环境时，可从 [Releases](https://github.com/tomasWade/octl/releases) 下载预编译二进制（linux/darwin × amd64/arm64），解压后放进 PATH；daemon 常驻见下文「让 daemon 常驻」。
+
+## 💬 示例输出
+
+<details>
+<summary><code>octl query snaps</code> — 全部 session 实时状态</summary>
+
+```text
+🔵 BUSY  重构认证模块       myproj    13s  abc123def456...
+🟢 IDLE  修复登录超时        global    14s  f9964bbacffe...
+🟢 IDLE  写周报             global    2m   f8c16b5d2ffe...
+🟡 ASK   数据迁移脚本        myproj    5m   f8bc4b454ffe...
+⚪ IDLE  Greeting message   global    1h   f8bc40890ffe...
 ```
 
-要求：Go 1.25+
+</details>
+
+<details>
+<summary><code>octl query daily --json</code> — 时间窗口活动聚合（供脚本 / skill 消费）</summary>
+
+```json
+{
+  "daily": {
+    "projects": [
+      {
+        "name": "myproj",
+        "newSessions": [{ "title": "补 e2e 测试", "timeCreated": 1757088000000 }],
+        "activeSessions": [
+          {
+            "title": "重构认证模块",
+            "msgCount": 42,
+            "firstUserExcerpt": "把认证中间件拆成独立模块，先看现有依赖…",
+            "lastAssistantExcerpt": "已完成拆分，全部测试通过…"
+          }
+        ],
+        "archivedSessions": [],
+        "sessionCostSum": 1.24
+      }
+    ],
+    "zombies": [],
+    "stuckStates": [{ "sessionId": "ses_f8bc4b454", "status": "PERMISSION" }]
+  }
+}
+```
+
+</details>
+
+<details>
+<summary><code>octl report</code> — <code>daily/2026-09-05.raw.md</code> 日报底片</summary>
+
+```markdown
+<!-- stats: {"from":1757068800000,"to":1757155200000,"projects":1,"active":6,"messages":87} -->
+# 2026-09-05
+
+## myproj
+
+### 重构认证模块 (ses_abc123def)
+- messages: 42 | window: 09:12–18:40 | cost: $1.24
+- 首条: 把认证中间件拆成独立模块，先看现有依赖…
+- 末条: 已完成拆分，全部测试通过…
+
+#### 用户消息骨架
+- 09:12 把认证中间件拆成独立模块，先看现有依赖
+- 10:40 中间件拆完了，补 e2e 测试
+- 16:05 CI 挂了一个用例，看一下
+```
+
+</details>
+
+## ⚙️ 工作原理
+
+octl 分为 **daemon** 和 **TUI** 两个进程：所有数据读取、状态推导、管理操作都集中在 daemon（唯一数据中心）；TUI 和 sidebar 插件只做渲染，通过 Unix socket 接收 daemon 推送的完整视图数据。
+
+```
+opencode 实例 ──hook 插件转发 11 类事件──┐
+                                        ▼
+SQLite（只读）──▶ octl daemon ──ViewMsg──▶ octl TUI / sidebar 插件
+```
 
 ## 启动方式
 
@@ -166,7 +255,7 @@ octl 包含一个独立的守护进程（daemon），通过 Unix socket 接收 o
 2. 每 30 秒定时同步数据库，修正过期或丢失的事件状态
 3. 通过 Unix socket 接收 11 类实时事件（session.status、session.idle、session.created、session.deleted、session.error、permission.asked、permission.replied、question.asked、question.replied、question.rejected、session.compacted）
 4. 将完整的 `ViewMsg`（projects / sessions / stats / favorites）通过 Unix socket 推送给已订阅的 TUI 和 sidebar 客户端
-5. 接收并执行 TUI 发来的管理操作请求（delete / export / create / fork / send / favorite / unfavorite），收藏由 daemon 内存统一维护（重启丢失）
+5. 接收并执行 TUI 发来的管理操作请求（delete / export / create / fork / send / favorite / unfavorite），收藏由 daemon 统一维护并持久化到 `~/.local/share/opencode/octl-state.json`（重启恢复）
 
 ### 安装 opencode 插件
 
@@ -218,7 +307,7 @@ TUI 插件通过 `~/.config/opencode/tui.json` 注册。编辑该文件，加入
 - 点击 project 标题行（鼠标左键）可折叠/展开该 project 的 session 列表，标题左侧图标在 ▶（已折叠）与 ▼（已展开）间切换；折叠状态在 daemon 刷新后保持
 - 每个 root session 显示状态图标、标题和最后更新时间（如 `🔵 my-session · 2m`）；有 subsession 的 session 标题带 ▶/▼ 图标，左键点击**行首图标**可折叠/展开其子会话列表（点击标题文字不再触发展开）
 - 有子节点的 session 默认折叠，仅显示 root 行，折叠标题带直接 subsession 计数（如 `▶ my-session · 2m (3)`）；展开后 subsession 按层级缩进显示并带各自状态图标
-- **收藏**：鼠标左键点击 session 标题即可收藏/取消收藏（收藏由 daemon 统一维护，TUI 与 sidebar 经 daemon 保持一致，重启 daemon 后丢失）；已收藏的 session 标题带 `★` 前缀并以黄色高亮。收藏列表在「收藏」tab 中显示（`★ Favorites`，条目从所有 project 的 sessions 反查标题/状态（状态点复用 `rowStatus` 聚合渲染父项、自身 `status` 渲染叶子，与「全部」树视图一致），已删除 session 自动跳过，点击条目同样可取消收藏）；空收藏时显示 `(no favorites)` 提示
+- **收藏**：鼠标左键点击 session 标题即可收藏/取消收藏（收藏由 daemon 统一维护并持久化，TUI 与 sidebar 经 daemon 保持一致，重启不丢）；已收藏的 session 标题带 `★` 前缀并以黄色高亮。收藏列表在「收藏」tab 中显示（`★ Favorites`，条目从所有 project 的 sessions 反查标题/状态（状态点复用 `rowStatus` 聚合渲染父项、自身 `status` 渲染叶子，与「全部」树视图一致），已删除 session 自动跳过，点击条目同样可取消收藏）；空收藏时显示 `(no favorites)` 提示
 - **删除（X 按钮）**：session 行尾 `★` 之后为 ↗ 跳转按钮、再后为红色 X 删除按钮，左键点击弹出确认浮层（`[确认删除]` / `[取消]`），确认后经 daemon 执行删除——删除 session 会连带其全部子 session，删除 project 会删除其下全部 session 并清理 project 记录；global project 不显示 X、不可删除
 - **tmux 跳转（↗ 按钮）**：session 行尾 `★` 与 X 之间为蓝色 ↗ 跳转按钮，「收藏」tab 条目行尾同样有 ↗。点击后：该 session 已附着 tmux 时直接切换到对应 pane；未附着时以 session 标题（清理特殊字符、截 15 字）新建 tmux session（落在该 session 所属目录）并以 TUI 模式 `opencode --session <id>` 打开。需 opencode 在 tmux 内启动（hook 插件上报 pid/tmux 位置，daemon 维护映射并在 opencode 退出后自动失效）
 - **hover 高亮**：鼠标悬停 session 标题时标题变色（浅蓝），移开后恢复
@@ -320,7 +409,7 @@ Session 的 **Status** 列显示 daemon 推送的实时状态（需连接 openco
 - 空收藏时显示提示 `No favorites yet — press f in Manage to favorite a session`。
 - 行格式：`状态图标 + 标题`，光标行带 `▶` 前缀，多选行带 `✓` 前缀并以紫色高亮。
 
-> 收藏由 **daemon 统一维护（内存态）**：收藏的权威数据源是 daemon 推送的 `ViewMsg.Favorites` 与每个 session 的 `isFavorite` 字段。TUI 按 `f`、sidebar 点击标题时，前端乐观更新后向 daemon 发送 `favorite` / `unfavorite` action，daemon 执行后重新推送 `ViewMsg` 调和；删除 session 时 daemon 自动剪枝收藏。TUI 与 sidebar 的收藏状态经 daemon 保持一致。收藏不写数据库——daemon 重启即丢失，磁盘持久化留待后续版本。
+> 收藏由 **daemon 统一维护（内存态）**：收藏的权威数据源是 daemon 推送的 `ViewMsg.Favorites` 与每个 session 的 `isFavorite` 字段。TUI 按 `f`、sidebar 点击标题时，前端乐观更新后向 daemon 发送 `favorite` / `unfavorite` action，daemon 执行后重新推送 `ViewMsg` 调和；删除 session 时 daemon 自动剪枝收藏。TUI 与 sidebar 的收藏状态经 daemon 保持一致。收藏不写 opencode 的数据库——持久化走 daemon 自己的 `~/.local/share/opencode/octl-state.json`（变更即写 + 周期快照 + 退出 flush，重启恢复），孤儿收藏由既有剪枝机制清理。
 
 ### Stats（用量统计，按 3）
 
@@ -372,6 +461,10 @@ cd plugin && bun install && bun test
 ```
 
 > 插件测试会从 `internal/plugins/templates/` 导入 TSX 模板，需要仓库根目录有 `node_modules` symlink（指向 `plugin/node_modules`）。全新 clone 后先执行 `ln -sfn plugin/node_modules node_modules`（CI 已内置此步骤）。
+
+## FAQ
+
+**为什么不用 opencode 自带的 session 列表，或多开几个终端？** octl 聚合的是*全部 project* 的实时状态——哪些 agent 卡在权限确认、哪些出错了、闲置了多久——并提供批量管理、用量统计和日报底片；多开终端看不到全局，也没有历史回溯。octl 不侵入 opencode 本体（只读 DB + CLI 删除），两者可以并用。
 
 ## 已知限制
 

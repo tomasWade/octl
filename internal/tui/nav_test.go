@@ -422,7 +422,8 @@ func TestApp_TabCycling_ModuloMath(t *testing.T) {
 	if (0-1+vc)%vc != 3 {
 		t.Error("ShiftTab: (0-1+4)%4 should be 3 (wrap)")
 	}
-	if (1-1+vc)%vc != 0 {
+	if (1-1+vc)%vc != 0 { //nolint:staticcheck // 刻意的恒等算式：自注释 wrap 语义
+
 		t.Error("ShiftTab: (1-1+4)%4 should be 0")
 	}
 	if (2-1+vc)%vc != 1 {

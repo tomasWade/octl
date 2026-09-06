@@ -59,6 +59,7 @@ main.go
   ├── scripts/               发布与钩子（见「分支模型与发布」）
   │     ├── publish-github.sh    master→main 快照发布
   │     ├── publish-exclude.txt  私有内容排除清单
+  │     └── octl.service      systemd 用户服务示例（daemon 常驻）
   │     └── hooks/pre-push       github remote 只放行 main/tags
   ├── internal/plugins/      插件模板与生成逻辑
   │     ├── gen.go           go:embed + MD5 + Generate
@@ -183,7 +184,7 @@ octl plugins --output=~/.config/opencode/plugins/
 
 该命令会输出 `octl-hook.js` 和 `octl-sidebar.tsx` 两个文件，并注入与当前 `octl` 二进制匹配的协议版本常量。每个 opencode 实例启动时会自动加载 `octl-hook.js`，过滤 11 类目标事件并转发到 daemon（事件 properties 附带 `pid` / `tmuxPane` / `tmuxSession` 附着信息，供 daemon 维护 session→pid→tmux pane 映射并在连接断开时清理）；插件自带 500 条 FIFO 缓冲和断线 2 秒重连。
 
-sidebar 插件通过 `~/.config/opencode/tui.json` 注册，指向 `~/.config/opencode/plugins/octl-sidebar.tsx` 的绝对路径。新版 sidebar 订阅 daemon 的 `view` 频道，直接渲染 `ViewMsg`（`normalizeProject` 对每个 session 透传 `parentId`/`hasChildren`/`depth`/`isFavorite`）。面板顶部为「全部」/「收藏」tab 切换栏：`activeTab` signal 默认 `"all"`，手写 text + `onMouseDown` 实现（不用 @opentui 的 `tab_select` 组件——其无鼠标交互），选中 tab 经 `tabTitleFg` 高亮 `#c0caf5`、未选中 `#565f89`，左键点击经 `switchTab` 纯函数切换（无效 tab 保持原值）；project/session 树在「全部」tab 渲染，收藏列表在「收藏」tab 渲染。并支持 project 级与 session 级两级鼠标折叠/展开（▶/▼ 图标，左键触发，非左键不响应）：project 标题显示下属 session 计数 (N)；有子节点的 session 默认折叠仅显示 root 行，折叠行标题显示直接 subsession 计数（格式 "标题 (N)"），展开后 subsession 按 depth 缩进渲染并显示自身状态。扁平 sessions 由 `buildSessionTree` 按 parentId 重建为多级树（悬空 parentId/自引用/depth≤0 按 root 处理）；父节点状态标记使用 daemon 推送的 `rowStatus` 聚合值（含全部后代最高优先级状态），折叠与展开均可见。折叠状态以 projectId / sessionId 为 key 在组件层保持，`ViewMsg` 刷新后不丢失。
+sidebar 插件通过 `~/.config/opencode/tui.json` 注册，指向 `~/.config/opencode/plugins/octl-sidebar.tsx` 的绝对路径。新版 sidebar 订阅 daemon 的 `view` 频道，直接渲染 `ViewMsg`（`normalizeProject` 对每个 session 透传 `parentId`/`hasChildren`/`depth`/`isFavorite`）。面板顶部为「全部」/「收藏」tab 切换栏：`activeTab` signal 默认 `"all"`，手写 text + `onMouseDown` 实现（不用 @opentui 的 `tab_select` 组件——其无鼠标交互），选中 tab 经 `tabTitleFg` 高亮 `#c0caf5`、未选中 `#565f89`，左键点击经 `switchTab` 纯函数切换（无效 tab 保持原值）；project/session 树在「全部」tab 渲染，收藏列表在「收藏」tab 渲染。「全部」tab 顶部另有状态 chip 过滤栏（`StatusFilterBar`）：单行动态渲染、只显示计数非零的状态 chip（`visibleChips`，3 字母缩写 ERR/ASK/RTY/BSY/IDL/UNK/ARC，PERMISSION 显示 ASK），chip = 状态色圆点 + 标签 + 实时计数，左键点击切换勾选（可多选组合），默认全不勾 = 不过滤，有勾选时**行首**出现 `✕` 一键清除（前置保证多 chip 撑满宽度时重置仍可达；sidebar 宽约 33 列，全量 7 chip 一行放不下，零计数状态过滤结果必空、无点击价值故隐藏）。过滤为纯客户端计算（`statusFilter` signal + `visibleProjects` memo），语义为剪枝保形：命中自身 status 的 session 及其整条祖先链保留（`filterSessionsKeepingAncestors`，visited 防环/悬空 parentId 安全），层级/缩进/折叠状态不丢；过滤后无可见 session 的 project 整组隐藏，全空时提示 `(no matching sessions)`；chip 计数由 `countStatuses` 统计（只看自身 status，不看 rowStatus 聚合）。并支持 project 级与 session 级两级鼠标折叠/展开（▶/▼ 图标，左键触发，非左键不响应）：project 标题显示下属 session 计数 (N)；有子节点的 session 默认折叠仅显示 root 行，折叠行标题显示直接 subsession 计数（格式 "标题 (N)"），展开后 subsession 按 depth 缩进渲染并显示自身状态。扁平 sessions 由 `buildSessionTree` 按 parentId 重建为多级树（悬空 parentId/自引用/depth≤0 按 root 处理）；父节点状态标记使用 daemon 推送的 `rowStatus` 聚合值（含全部后代最高优先级状态），折叠与展开均可见。折叠状态以 projectId / sessionId 为 key 在组件层保持，`ViewMsg` 刷新后不丢失。
 
 **收藏（daemon 权威驱动）**：session 行已拆分为独立 text 子元素——行首展开图标 text（▶/▼，仅绑展开折叠，左键触发）+ 标题 text（点击切换收藏），固定 1 空格 gap；project 行同样在项目名前用 `statusColors` 渲染 `rowStatus` 聚合状态点。标题 hover 高亮（`hoveredId` signal，`onMouseOver`/`onMouseOut` 驱动，变色 `#c0caf5`）。收藏的**权威数据源是 daemon 推送的 `ViewMsg.Favorites` 与每个 session 的 `isFavorite` 字段**：每次收到 `view` 消息时，sidebar 将 `Favorites` 列表同步到本地 `favorites` signal（旧 daemon 无该字段时优雅降级为空收藏）。点击标题触发 `toggleFavoriteAction`：向 daemon 发送 `favorite`/`unfavorite` action（经 `sendAction`），并乐观更新本地 signal，由下一次 `ViewMsg` 确认调和。已收藏标题带 `★` 前缀并以 `#e0af68` 高亮；收藏列表（`★ Favorites`）在「收藏」tab 内显示，空收藏时显示 `(no favorites)` 提示，条目从所有 project 的 sessions 中反查标题/状态（状态点复用 `rowStatus` 聚合渲染父项、自身 `status` 渲染叶子，与「全部」树视图一致），已删除 session 自动跳过，点击条目可取消收藏。
 
@@ -236,7 +237,7 @@ go test -run TestRealDBSchema
 - 根包（action_test.go）：fake daemon 端到端（snapshot 候选应答 + action 记录 + result 回放）——delete 模糊匹配/批量去重/零命中/歧义不发 action、create 的 message 与 --dir 默认 cwd/显式覆盖、fork/send 的 SessionID/Message/Directory 留空、result 失败与 result.Error 的退出码、用法错误表驱动、`renderActionResult` 渲染与退出码、`confirmAction` 输入解析、`resolveActionTargets` 去重与整体失败。
 - `internal/tui`（nav_test.go）：ViewType 枚举与 NavItems 三视图顺序、数字键 1/2/3 切换、Tab/Shift+Tab 循环、app 层 `FavoritesToggleRequestMsg`/`FavoritesRemoveRequestMsg` 的 toggle 语义（对已收藏发 `unfavorite`、未收藏发 `favorite` action + 乐观更新）、`daemonViewMsg` 以 `ViewMsg.Favorites` 重建 `favoritesMap`（daemon 权威源，陈旧本地项丢弃）并广播 `FavoritesChangedMsg`。
 - `internal/tui/views`（favorites_test.go）：`rebuildFavoriteIDs` 排序（按 ViewMsg 出现顺序 + 补全未出现 ID）、光标 clamp、Space 多选、f 取消收藏（多选/单条，发 `FavoritesRemoveRequestMsg`）、d 删除（delete action + 收藏移除的 `tea.Sequence`）、滚动窗口、空态提示、状态色映射。
-- `plugin`：事件过滤、buffer FIFO、sidebar helper 函数（含 project/session 折叠、`buildSessionTree` 树重建、`normalizeProject` 字段透传（含 pid/tmux）、`tabTitleFg`/`switchTab` tab 高亮与切换、`favoritesEmptyHint` 收藏空态提示、`toggleFavoriteImpl` 收藏切换不可变性、`sessionRowColor` 状态点着色、删除相关纯函数 `isGlobalProject`/`buildActionPayload`/`collectDescendantIDs`/`collectProjectSessionIDs`/`confirmDeleteAction`/`removeIdsFromMap`、tmux 跳转 `makeTmuxSessionName`/`focusSession`（注入 runner 验证命令序列）、hook 事件 payload 携带 pid/tmux 字段、`ViewMsg.Favorites` 同步本地 signal 与 isFavorite 兜底）、ViewMsg 解析。
+- `plugin`：事件过滤、buffer FIFO、sidebar helper 函数（含 project/session 折叠、`buildSessionTree` 树重建、`normalizeProject` 字段透传（含 pid/tmux）、`tabTitleFg`/`switchTab` tab 高亮与切换、状态 chip 过滤纯函数（`STATUS_CHIPS` 定义/`visibleChips` 非零筛选/`filterActive`/`sessionMatchesFilter`/`toggleStatusFilter`/`filterSessionsKeepingAncestors` 剪枝保形含祖先链保留/环/悬空 parentId/顺序保持/`countStatuses` 只计自身 status）、`favoritesEmptyHint` 收藏空态提示、`toggleFavoriteImpl` 收藏切换不可变性、`sessionRowColor` 状态点着色、删除相关纯函数 `isGlobalProject`/`buildActionPayload`/`collectDescendantIDs`/`collectProjectSessionIDs`/`confirmDeleteAction`/`removeIdsFromMap`、tmux 跳转 `makeTmuxSessionName`/`focusSession`（注入 runner 验证命令序列）、hook 事件 payload 携带 pid/tmux 字段、`ViewMsg.Favorites` 同步本地 signal 与 isFavorite 兜底）、ViewMsg 解析。
 
 ## 代码风格与约定
 
@@ -433,7 +434,7 @@ action 执行完成后，daemon 会重新 `buildView()` 并 `pushView()`，所�
 - 发布内容 = **工作区当前内容**；先 commit 到 master 再发布，禁止把未提交的 WIP 发布成公开快照
 - 新增私有文件（本机配置、部署文档等）必须同步登记进 `scripts/publish-exclude.txt`
 - 防误推：`.git/hooks/pre-push`（源在 `scripts/hooks/pre-push`）对 github remote 只放行 `refs/heads/main` 与 `refs/tags/*`，其余 refspec（含 `--all`/`--mirror`/误推 master）一律 exit 1；钩子不随 clone 传播，新 clone 后按其头部注释重装
-- 发版：`git tag -a v0.x.y main && git push github v0.x.y`——README 的 `go install ...@latest` 依赖 tag 存在
+- 发版：`git tag -a v0.x.y main && git push github v0.x.y`——README 的 `go install ...@latest` 依赖 tag 存在；tag 推送后 `.github/workflows/release.yml` 自动交叉编译 linux/darwin × amd64/arm64 二进制（`-X main.version` 注入 tag 号）并创建 GitHub Release
 - 新机器首次配置：见 `scripts/publish-github.sh` 头部注释（remote/fetch/branch/装钩子四步）
 
 ## 常见陷阱
@@ -452,7 +453,8 @@ action 执行完成后，daemon 会重新 `buildView()` 并 `pushView()`，所�
 
 ## 发布与部署
 
-- CI 为 GitHub Actions（`.github/workflows/ci.yml`）：Go build+test 与 Bun 插件测试，push/PR 触发。
+- CI 为 GitHub Actions（`.github/workflows/ci.yml`）：golangci-lint（固定 v2.13.2）、Go build+test 与 Bun 插件测试，push/PR 触发。
+- 发版流水线（`.github/workflows/release.yml`）：tag（`v*`）推送触发，交叉编译四平台二进制并自动创建 GitHub Release（附件 tar.gz + 自动生成 release notes）。
 - 构建产物为单个静态二进制文件 `octl`（CGO-free）。
 - daemon 设计为前台运行，由外部 supervisor/systemd 管理；systemd unit 示例未包含在仓库中。
 - sidebar 插件和 hook 插件由 `octl plugins --output=<dir>` 生成，需要随版本一起更新到 opencode 的 plugins 目录。

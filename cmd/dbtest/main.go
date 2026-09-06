@@ -17,7 +17,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "FAIL: New() error: %v\n", err)
 		os.Exit(1)
 	}
-	defer d.Close()
+	defer func() { _ = d.Close() }()
 	fmt.Println("PASS: New() connected to database")
 
 	// 测试 ListSessions

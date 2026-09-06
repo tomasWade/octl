@@ -45,7 +45,7 @@ func dialSubscribed(socketPath string, timeout time.Duration) (net.Conn, *bufio.
 
 	// 一次性交互，单条 deadline 覆盖读写全程即可，无需更细的粒度。
 	if err := conn.SetDeadline(time.Now().Add(timeout)); err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return nil, nil, fmt.Errorf("set deadline: %w", err)
 	}
 
@@ -55,7 +55,7 @@ func dialSubscribed(socketPath string, timeout time.Duration) (net.Conn, *bufio.
 		Version:  plugins.ProtocolMD5(),
 	}
 	if err := json.NewEncoder(conn).Encode(&sub); err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return nil, nil, fmt.Errorf("send subscribe: %w", err)
 	}
 
@@ -92,7 +92,7 @@ func doQueryOnce(socketPath string, req RequestMsg, timeout time.Duration) (*Res
 	if err != nil {
 		return nil, err
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	enc := json.NewEncoder(conn)
 	id := fmt.Sprintf("cli-%d", time.Now().UnixNano())

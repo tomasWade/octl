@@ -1,0 +1,23 @@
+version: "2"
+
+linters:
+  default: standard
+  settings:
+    errcheck:
+      exclude-functions:
+        # CLI 帮助/结果输出写到 stdout/stderr，写失败无需处理
+        - fmt.Fprintf
+        - fmt.Fprint
+        - fmt.Fprintln
+  exclusions:
+    rules:
+      # 测试里的清理类调用（Close 等）返回值按惯例不检查
+      - path: _test\.go
+        linters: [errcheck]
+      # 测试中的 if/else 链不强求改 switch（避免无谓 churn）
+      - path: _test\.go
+        text: "QF1003"
+
+formatters:
+  enable:
+    - gofmt

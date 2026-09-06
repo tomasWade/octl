@@ -23,7 +23,7 @@ func ActionOnce(socketPath string, action ActionMsg, timeout time.Duration) (*Re
 	if err != nil {
 		return nil, err
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	action.Type = "action"
 	if err := json.NewEncoder(conn).Encode(&action); err != nil {

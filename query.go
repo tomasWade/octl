@@ -67,7 +67,7 @@ func runQuery(args []string) int {
 	// method 在前、flags 在后（如 `octl query messages xx --nums all`）。
 	// 先分离重组再交给标准 flag 解析。
 	flags, positional := reorderQueryArgs(args)
-	fs.Parse(flags)
+	_ = fs.Parse(flags) // ExitOnError：出错时已 os.Exit
 
 	if *timeoutSec <= 0 {
 		fmt.Fprintln(os.Stderr, "--timeout 必须为正整数")

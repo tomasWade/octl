@@ -128,7 +128,7 @@ func printMainUsage(out io.Writer, fs *flag.FlagSet) {
 func runPlugins(args []string) int {
 	fs := flag.NewFlagSet("plugins", flag.ExitOnError)
 	outputDir := fs.String("output", ".", "Output directory for generated plugin files")
-	fs.Parse(args)
+	_ = fs.Parse(args) // ExitOnError：出错时已 os.Exit
 
 	if err := plugins.Generate(*outputDir); err != nil {
 		fmt.Fprintf(os.Stderr, "plugins: %v\n", err)
@@ -145,7 +145,7 @@ func runDaemon(dbPath, socketPath string) {
 		fmt.Fprintf(os.Stderr, "DB error: %v\n", err)
 		os.Exit(1)
 	}
-	defer database.Close()
+	defer func() { _ = database.Close() }()
 
 	mgr := manage.New(database)
 	sm := daemon.NewStateManagerWithSocket(database, socketPath)

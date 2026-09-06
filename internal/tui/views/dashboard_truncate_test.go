@@ -2,8 +2,8 @@ package views
 
 import (
 	"strings"
-	"unicode/utf8"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/tomasWade/octl/internal/types"
 )

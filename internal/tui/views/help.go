@@ -50,9 +50,6 @@ var (
 
 	helpDescStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("252"))
-
-	helpMutedStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("243"))
 )
 
 // View 渲染帮助内容。

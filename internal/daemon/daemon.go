@@ -127,11 +127,11 @@ func (sm *StateManager) SnapshotCh() <-chan []SessionState {
 func (sm *StateManager) Close() {
 	sm.closeOnce.Do(func() {
 		if sm.ln != nil {
-			sm.ln.Close()
+			_ = sm.ln.Close()
 		}
 		sm.clientsMu.Lock()
 		for _, cl := range sm.clients {
-			cl.conn.Close()
+			_ = cl.conn.Close()
 		}
 		sm.clients = sm.clients[:0]
 		sm.clientsMu.Unlock()
@@ -155,7 +155,7 @@ func isSocketActive(path string) bool {
 	if err != nil {
 		return false
 	}
-	conn.Close()
+	_ = conn.Close()
 	return true
 }
 
@@ -187,7 +187,7 @@ func (sm *StateManager) Run() error {
 	}
 
 	// Remove any stale socket file from a previous run.
-	os.Remove(sockPath)
+	_ = os.Remove(sockPath)
 
 	// Perform the initial database sync before accepting connections.
 	// When opencode is running it may hold SQLite locks; a failure here is
@@ -231,8 +231,8 @@ func (sm *StateManager) Run() error {
 		}
 	}()
 
-	defer ln.Close()
-	defer os.Remove(sockPath)
+	defer func() { _ = ln.Close() }()
+	defer func() { _ = os.Remove(sockPath) }()
 
 	ticker := time.NewTicker(sm.dbSyncInterval)
 	defer ticker.Stop()
@@ -294,7 +294,7 @@ func (sm *StateManager) handleConn(conn net.Conn) {
 		if r := recover(); r != nil {
 			log.Printf("[daemon] handleConn panic: %v", r)
 		}
-		conn.Close()
+		_ = conn.Close()
 	}()
 	sc := bufio.NewScanner(conn)
 	sc.Split(bufio.ScanLines)
@@ -986,7 +986,7 @@ func (sm *StateManager) broadcastSnapshot(snap []SessionState) {
 			err := cl.enc.Encode(msg)
 			cl.mu.Unlock()
 			if err != nil {
-				cl.conn.Close()
+				_ = cl.conn.Close()
 				continue
 			}
 		}
@@ -1245,7 +1245,7 @@ func (sm *StateManager) broadcastView(view *ViewMsg) {
 			err := cl.enc.Encode(view)
 			cl.mu.Unlock()
 			if err != nil {
-				cl.conn.Close()
+				_ = cl.conn.Close()
 				continue
 			}
 		}

@@ -120,11 +120,11 @@ func TestMsgScroll_UpArrow_Works(t *testing.T) {
 
 func TestMsgScroll_HLResetsScrollToZero(t *testing.T) {
 	m := DashboardModel{
-		loaded:     true,
-		mode:       modeMessage,
-		msgScroll:  42,
-		msgIndex:   1,
-		convMsgs:   []conversationMessage{{}, {}},
+		loaded:    true,
+		mode:      modeMessage,
+		msgScroll: 42,
+		msgIndex:  1,
+		convMsgs:  []conversationMessage{{}, {}},
 	}
 	// h (left) — decrements msgIndex and resets scroll
 	result, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}})

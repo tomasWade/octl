@@ -18,14 +18,14 @@ type FavoritesRemoveRequestMsg struct {
 
 // FavoritesModel 显示收藏的 session 列表，支持光标导航、多选和移除操作。
 type FavoritesModel struct {
-	view  daemon.ViewMsg  // 最近一次 daemon 推送的视图数据，用于反查 session 标题和状态
-	favorites  map[string]bool // 收藏 session ID 集合
-	favoriteIDs []string       // 有序的收藏 session ID 列表
-	cursor   int
-	selected map[string]bool // 多选集合，与 dashboard 一致
-	width    int
-	height   int
-	loaded   bool
+	view        daemon.ViewMsg  // 最近一次 daemon 推送的视图数据，用于反查 session 标题和状态
+	favorites   map[string]bool // 收藏 session ID 集合
+	favoriteIDs []string        // 有序的收藏 session ID 列表
+	cursor      int
+	selected    map[string]bool // 多选集合，与 dashboard 一致
+	width       int
+	height      int
+	loaded      bool
 
 	// 删除确认状态
 	confirmingDelete bool     // 是否处于删除确认模式
@@ -82,7 +82,7 @@ func (m FavoritesModel) Update(msg tea.Msg) (FavoritesModel, tea.Cmd) {
 // rebuildFavoriteIDs 从 favorites map 重建有序的 ID 列表。
 // 按 ViewMsg 中 session 的出现顺序排列，保证渲染确定性。
 func (m *FavoritesModel) rebuildFavoriteIDs() {
-	if m.favorites == nil || len(m.favorites) == 0 {
+	if len(m.favorites) == 0 {
 		m.favoriteIDs = nil
 		m.cursor = 0
 		return
@@ -396,10 +396,10 @@ func (m FavoritesModel) confirmView() string {
 		if len(title) > 50 {
 			title = truncateRunes(title, 47)
 		}
-		sb.WriteString(fmt.Sprintf("  %s\n", title))
-		sb.WriteString(fmt.Sprintf("  ID: %s\n\n", abbreviateID(m.pendingDeleteIDs[0])))
+		fmt.Fprintf(&sb, "  %s\n", title)
+		fmt.Fprintf(&sb, "  ID: %s\n\n", abbreviateID(m.pendingDeleteIDs[0]))
 	} else {
-		sb.WriteString(fmt.Sprintf("Delete %d favorite sessions?\n\n", count))
+		fmt.Fprintf(&sb, "Delete %d favorite sessions?\n\n", count)
 		for _, id := range m.pendingDeleteIDs {
 			session := m.sessionByID(id)
 			title := session.Title
@@ -409,7 +409,7 @@ func (m FavoritesModel) confirmView() string {
 			if len(title) > 50 {
 				title = truncateRunes(title, 47)
 			}
-			sb.WriteString(fmt.Sprintf("  %s  (%s)\n", title, abbreviateID(id)))
+			fmt.Fprintf(&sb, "  %s  (%s)\n", title, abbreviateID(id))
 		}
 		sb.WriteString("\n")
 	}

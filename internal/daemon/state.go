@@ -112,18 +112,18 @@ func (sm *StateManager) saveState() {
 	}
 	tmpName := tmp.Name()
 	if _, err := tmp.Write(b); err != nil {
-		tmp.Close()
-		os.Remove(tmpName)
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
 		log.Printf("[daemon] state: write: %v", err)
 		return
 	}
 	if err := tmp.Close(); err != nil {
-		os.Remove(tmpName)
+		_ = os.Remove(tmpName)
 		log.Printf("[daemon] state: close: %v", err)
 		return
 	}
 	if err := os.Rename(tmpName, path); err != nil {
-		os.Remove(tmpName)
+		_ = os.Remove(tmpName)
 		log.Printf("[daemon] state: rename: %v", err)
 	}
 }

@@ -20,7 +20,7 @@ import (
 // OpResult 表示单个管理操作的结果。
 type OpResult struct {
 	SessionID string `json:"sessionId"`
-	Action    string `json:"action"`   // "delete" | "export" | "archive"
+	Action    string `json:"action"` // "delete" | "export" | "archive"
 	Success   bool   `json:"success"`
 	Error     string `json:"error,omitempty"`
 }
@@ -122,7 +122,7 @@ func (m *Manager) DeleteProject(projectID string) error {
 	if err != nil {
 		return fmt.Errorf("open writable db: %w", err)
 	}
-	defer rw.Close()
+	defer func() { _ = rw.Close() }()
 
 	_, err = rw.Exec("DELETE FROM project WHERE id = ?", projectID)
 	if err != nil {

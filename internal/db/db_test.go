@@ -514,11 +514,3 @@ func TestGetSessionMessages_Ordering(t *testing.T) {
 		}
 	}
 }
-
-// mustExec is a test helper that runs an Exec statement and fails the test on error.
-func mustExec(t *testing.T, db *sql.DB, stmt string) {
-	t.Helper()
-	if _, err := db.Exec(stmt); err != nil {
-		t.Fatalf("exec: %v\nstmt: %s", err, stmt)
-	}
-}

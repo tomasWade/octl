@@ -28,7 +28,7 @@ func runReport(args []string) int {
 
 	// 参数重排：方法在前 flags 在后的自然写法同样适用。
 	flags, positional := reorderArgs(args, map[string]bool{"socket": true, "timeout": true, "date": true, "from": true, "to": true, "dir": true})
-	fs.Parse(flags)
+	_ = fs.Parse(flags) // ExitOnError：出错时已 os.Exit
 
 	if *timeoutSec <= 0 {
 		fmt.Fprintln(os.Stderr, "--timeout 必须为正整数")

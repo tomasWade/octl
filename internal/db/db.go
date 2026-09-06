@@ -69,7 +69,7 @@ ORDER BY s.time_created DESC`
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var sessions []types.Session
 	for rows.Next() {
@@ -185,7 +185,7 @@ ORDER BY cost DESC`
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var usages []types.ModelUsage
 	for rows.Next() {
@@ -219,7 +219,7 @@ func (d *DB) GetAllProjects() ([]types.Project, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var projects []types.Project
 	for rows.Next() {
@@ -260,7 +260,7 @@ ORDER BY p.time_created ASC`
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var parts []types.MessagePart
 	for rows.Next() {
@@ -325,7 +325,7 @@ GROUP BY m.session_id`
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var out []types.MessageActivity
 	for rows.Next() {
@@ -403,7 +403,7 @@ LIMIT 8`
 	if err != nil {
 		return "", err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var texts []string
 	for rows.Next() {
@@ -446,7 +446,7 @@ ORDER BY m.time_created ASC, p.time_created ASC`
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var out []types.SkeletonEntry
 	var curID string

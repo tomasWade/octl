@@ -47,18 +47,18 @@ type daemonResultMsg struct {
 
 // Model 是 octl TUI 的顶层 Bubble Tea 模型。
 type Model struct {
-	width         int
-	height        int
-	contentWidth  int
-	contentHeight int
-	activeView    ViewType
-	nav           NavModel
-	statusBar     StatusBarModel
-	dashboard     views.DashboardModel
-	favorites     views.FavoritesModel
-	stats         views.StatsModel
-	help          views.HelpModel
-	socketPath    string
+	width                 int
+	height                int
+	contentWidth          int
+	contentHeight         int
+	activeView            ViewType
+	nav                   NavModel
+	statusBar             StatusBarModel
+	dashboard             views.DashboardModel
+	favorites             views.FavoritesModel
+	stats                 views.StatsModel
+	help                  views.HelpModel
+	socketPath            string
 	daemonClient          *daemon.SocketClient
 	daemonOnline          bool
 	daemonVersionMismatch bool // daemonVersionMismatch 在 daemon 返回协议版本不匹配响应时置位，header 显示升级提示。
@@ -69,15 +69,15 @@ type Model struct {
 // New 使用给定的刷新间隔和 daemon socket 路径创建一个新的 Model。
 func New(refreshTime int, socketPath string) Model {
 	return Model{
-		activeView:  DashboardView,
-		nav:         NewNavModel(),
-		statusBar:   NewStatusBarModel(),
-		dashboard:   views.NewDashboardModel(refreshTime),
-		favorites:   views.NewFavoritesModel(),
-		stats:       views.NewStatsModel(),
-		help:        views.NewHelpModel(),
-		socketPath:  socketPath,
-		daemonMsgCh: make(chan interface{}, 256),
+		activeView:   DashboardView,
+		nav:          NewNavModel(),
+		statusBar:    NewStatusBarModel(),
+		dashboard:    views.NewDashboardModel(refreshTime),
+		favorites:    views.NewFavoritesModel(),
+		stats:        views.NewStatsModel(),
+		help:         views.NewHelpModel(),
+		socketPath:   socketPath,
+		daemonMsgCh:  make(chan interface{}, 256),
 		favoritesMap: make(map[string]bool),
 	}
 }

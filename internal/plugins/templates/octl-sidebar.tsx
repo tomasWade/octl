@@ -336,6 +336,113 @@ export function buildSessionTree(flatSessions: SidebarSession[]): SessionTreeNod
   return roots;
 }
 
+// 状态过滤 chip 定义：过滤栏展示顺序按状态优先级从高到低。标签用 3 字母
+// 缩写（sidebar 宽约 33 列，单行动态渲染需要紧凑）；PERMISSION 显示为 ASK，
+// 与 TUI 的 🟡 ASK 图标语义一致（权限确认与提问统一映射）。
+export const STATUS_CHIPS: ReadonlyArray<{ key: string; label: string }> = [
+  { key: "ERROR", label: "ERR" },
+  { key: "PERMISSION", label: "ASK" },
+  { key: "RETRY", label: "RTY" },
+  { key: "BUSY", label: "BSY" },
+  { key: "IDLE", label: "IDL" },
+  { key: "UNKNOWN", label: "UNK" },
+  { key: "ARCHIVED", label: "ARC" },
+];
+
+// 纯函数：按计数筛选需要渲染的 chip（只保留 count > 0 的状态，保持定义顺序）。
+// 零计数状态过滤结果必为空、无点击价值，隐藏后单行即可容纳；全零返回空数组
+// （无任何 session 时过滤栏整体不渲染）。
+export function visibleChips(
+  counts: Record<string, number>,
+): ReadonlyArray<{ key: string; label: string }> {
+  return STATUS_CHIPS.filter((chip) => (counts?.[chip.key] ?? 0) > 0);
+}
+
+// 纯函数：判断状态过滤是否有实际生效的勾选（存在至少一个真值 key）。
+// toggleStatusFilter 只产生真值 key（取消即删除）；防御性把 {X:false} 之类
+// 脏数据视为未激活，与 sessionMatchesFilter 的判定保持一致。
+export function filterActive(
+  filter: Record<string, boolean> | undefined | null,
+): boolean {
+  if (!filter) return false;
+  return Object.keys(filter).some((k) => filter[k]);
+}
+
+// 纯函数：判断 session 是否命中状态过滤。
+// 无生效勾选时恒 true（不过滤）；有勾选时要求自身 status 命中。
+export function sessionMatchesFilter(
+  s: { status: string } | undefined | null,
+  filter: Record<string, boolean>,
+): boolean {
+  if (!filterActive(filter)) return true;
+  return !!s && filter[s.status] === true;
+}
+
+// 纯函数：不可变切换状态过滤勾选（未勾选加入 / 已勾选删除）。
+export function toggleStatusFilter(
+  state: Record<string, boolean>,
+  status: string,
+): Record<string, boolean> {
+  const next = { ...state };
+  if (next[status]) {
+    delete next[status];
+  } else {
+    next[status] = true;
+  }
+  return next;
+}
+
+// 纯函数：过滤扁平 sessions，保留「自身 status 命中」的节点及其全部祖先链
+// （剪枝保形：匹配项的父链全部保留，层级/缩进/折叠状态不丢；其余剪掉）。
+// 树结构由调用方交给 buildSessionTree 重建，本函数只做扁平集合运算：
+// 1. 建 id→session 索引；2. 从每个命中节点沿 parentId 向上标记祖先
+// （visited 防御 parent 环与自引用，悬空 parentId 安全停止）；
+// 3. 按原数组顺序输出被标记的 session。
+export function filterSessionsKeepingAncestors(
+  flatSessions: SidebarSession[],
+  filter: Record<string, boolean>,
+): SidebarSession[] {
+  if (!Array.isArray(flatSessions)) return [];
+  if (!filterActive(filter)) return flatSessions.slice();
+  const byId = new Map<string, SidebarSession>();
+  for (const s of flatSessions) {
+    if (s && s.sessionId) byId.set(s.sessionId, s);
+  }
+  const keep = new Set<string>();
+  for (const s of flatSessions) {
+    if (!s || !s.sessionId || !sessionMatchesFilter(s, filter)) continue;
+    let cur: SidebarSession | undefined = s;
+    const visited = new Set<string>();
+    while (cur && cur.sessionId && !visited.has(cur.sessionId)) {
+      visited.add(cur.sessionId);
+      keep.add(cur.sessionId);
+      cur = cur.parentId ? byId.get(cur.parentId) : undefined;
+    }
+  }
+  return flatSessions.filter((s) => s && s.sessionId && keep.has(s.sessionId));
+}
+
+// 纯函数：统计全部 project 中各自身 status 的 session 数（chip 徽章计数，
+// 不看 rowStatus 聚合）。只统计 STATUS_CHIPS 覆盖的已知状态，未知状态忽略；
+// 每个已知状态恒有 key（缺省 0），chip 渲染无需判空。
+export function countStatuses(
+  projects: Array<{ sessions?: SidebarSession[] }> | undefined | null,
+): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const chip of STATUS_CHIPS) counts[chip.key] = 0;
+  if (!Array.isArray(projects)) return counts;
+  for (const p of projects) {
+    if (!p || !Array.isArray(p.sessions)) continue;
+    for (const s of p.sessions) {
+      if (!s || !s.status) continue;
+      if (Object.prototype.hasOwnProperty.call(counts, s.status)) {
+        counts[s.status]++;
+      }
+    }
+  }
+  return counts;
+}
+
 // 纯函数：把 daemon ViewMsg 中的原始 project 对象规范化为 SidebarProject，
 // 同时对其 sessions 逐项透传 parentId / hasChildren / depth / isFavorite，
 // 以及 tmux 跳转所需的 pid / tmuxPane / tmuxSession 附着信息。
@@ -622,6 +729,66 @@ export function ProjectGroup(props: {
   );
 }
 
+// 单个状态过滤 chip：状态色圆点 + 缩写标签 + 实时计数，左键点击切换勾选。
+// 激活时整 chip 以状态色加粗高亮，未激活弱化灰；间距写在字符串内（沿用既有
+// 惯例，规避多 text 边界对空格的处理差异）。
+function StatusFilterChip(props: {
+  chipKey: string;
+  label: string;
+  filter: () => Record<string, boolean>;
+  counts: () => Record<string, number>;
+  onToggle: (status: string) => void;
+}) {
+  const active = () => !!props.filter()[props.chipKey];
+  const color = Object.prototype.hasOwnProperty.call(statusColors, props.chipKey)
+    ? statusColors[props.chipKey]
+    : "#565f89";
+  return (
+    <text
+      bold={active()}
+      fg={active() ? color : "#565f89"}
+      onMouseDown={(e) => handleMouseDown(e, () => props.onToggle(props.chipKey))}
+    >
+      {`● ${props.label} ${props.counts()[props.chipKey] ?? 0}  `}
+    </text>
+  );
+}
+
+// 状态过滤栏：单行、只渲染非零状态的 chip（visibleChips），点击切换勾选
+// （可多选组合），作用于「全部」tab 的 project/session 树（剪枝保形，折叠
+// 状态不丢）。默认全不勾 = 不过滤；有勾选时行首出现 ✕ 一键清除——前置而非
+// 行尾，保证极端多 chip 撑满宽度时重置按钮仍可见可达。
+function StatusFilterBar(props: {
+  filter: () => Record<string, boolean>;
+  counts: () => Record<string, number>;
+  onToggle: (status: string) => void;
+  onReset: () => void;
+}) {
+  const chips = () => visibleChips(props.counts());
+  if (chips().length === 0) return null;
+  return (
+    <box flexDirection="row" paddingY={0.5}>
+      {filterActive(props.filter()) && (
+        <text
+          fg="#f7768e"
+          onMouseDown={(e) => handleMouseDown(e, props.onReset)}
+        >
+          {'✕ '}
+        </text>
+      )}
+      {chips().map((chip) => (
+        <StatusFilterChip
+          chipKey={chip.key}
+          label={chip.label}
+          filter={props.filter}
+          counts={props.counts}
+          onToggle={props.onToggle}
+        />
+      ))}
+    </box>
+  );
+}
+
 function OctlSidebar(props: {
   projects: SidebarProject[];
   connected: boolean;
@@ -634,6 +801,20 @@ function OctlSidebar(props: {
   const [collapsed, setCollapsed] = createSignal<Record<string, boolean>>({});
   const [expandedSessions, setExpandedSessions] = createSignal<Record<string, boolean>>({});
   const [activeTab, setActiveTab] = createSignal<"all" | "favorites">("all");
+  // 状态过滤：勾选集合（真值 key），作用于「全部」tab 的树；默认空 = 不过滤。
+  const [statusFilter, setStatusFilter] = createSignal<Record<string, boolean>>({});
+  // chip 徽章计数与过滤后的可见 project 列表。纯客户端计算：daemon 推送的
+  // 完整 ViewMsg 已含全部 session 与状态，过滤只是渲染层筛选。
+  const statusCounts = createMemo(() => countStatuses(props.projects));
+  const visibleProjects = createMemo(() => {
+    if (!filterActive(statusFilter())) return props.projects;
+    return props.projects
+      .map((p) => ({
+        ...p,
+        sessions: filterSessionsKeepingAncestors(p.sessions, statusFilter()),
+      }))
+      .filter((p) => p.sessions.length > 0);
+  });
   const [confirmState, setConfirmState] = createSignal<{ node: SessionTreeNode | SidebarProject } | null>(null);
 
   const toggleProject = (projectId: string) => {
@@ -650,6 +831,15 @@ function OctlSidebar(props: {
       }
       return next;
     });
+  };
+
+  // 状态 chip 勾选切换与一键清除（不可变更新，交给 memo 重算可见列表）。
+  const toggleStatus = (status: string) => {
+    setStatusFilter((prev) => toggleStatusFilter(prev, status));
+  };
+
+  const resetStatusFilter = () => {
+    setStatusFilter({});
   };
 
   // 行尾 X 按钮触发的删除请求：直接打开确认条。
@@ -767,7 +957,18 @@ function OctlSidebar(props: {
       )}
       {props.connected && activeTab() === "all" && (
         <box flexDirection="column">
-          {props.projects.map((p) => {
+          {/* 状态 chip 过滤栏：纯客户端过滤「全部」树，剪枝保形；无勾选时全量展示。 */}
+          <StatusFilterBar
+            filter={statusFilter}
+            counts={statusCounts}
+            onToggle={toggleStatus}
+            onReset={resetStatusFilter}
+          />
+          {/* 有数据但全被过滤掉时给出明确提示（区别于「无任何 session」）。 */}
+          {visibleProjects().length === 0 && props.projects.length > 0 && (
+            <text fg="#a9b1d6">(no matching sessions)</text>
+          )}
+          {visibleProjects().map((p) => {
             const pid = p.projectId;
             return (
               <ProjectGroup

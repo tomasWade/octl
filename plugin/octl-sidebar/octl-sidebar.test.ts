@@ -27,6 +27,13 @@ import {
   collectProjectSessionIDs,
   confirmDeleteAction,
   removeIdsFromMap,
+  STATUS_CHIPS,
+  visibleChips,
+  filterActive,
+  sessionMatchesFilter,
+  toggleStatusFilter,
+  filterSessionsKeepingAncestors,
+  countStatuses,
 } from "../../internal/plugins/templates/octl-sidebar.tsx";
 
 describe("octl-sidebar helpers", () => {
@@ -6315,5 +6322,325 @@ describe("focusSession", () => {
       autoSwitch: false,
     });
     expect(commands).toEqual([`tmux has-session -t '${name}'`]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 状态 chip 过滤栏（纯客户端过滤「全部」树，剪枝保形）
+// ---------------------------------------------------------------------------
+
+// 构造完整 SidebarSession 测试数据（filterSessionsKeepingAncestors 入参）。
+function mkSession(id: string, status: string, parentId = "") {
+  return {
+    sessionId: id,
+    title: id,
+    directory: "/tmp",
+    timeUpdated: 0,
+    status,
+    rowStatus: status,
+    parentId,
+    hasChildren: false,
+    depth: 0,
+    isFavorite: false,
+    pid: 0,
+    tmuxPane: null,
+    tmuxSession: null,
+  };
+}
+
+describe("STATUS_CHIPS", () => {
+  test("covers all 7 known statuses in priority order", () => {
+    expect(STATUS_CHIPS.map((c) => c.key)).toEqual([
+      "ERROR",
+      "PERMISSION",
+      "RETRY",
+      "BUSY",
+      "IDLE",
+      "UNKNOWN",
+      "ARCHIVED",
+    ]);
+  });
+
+  test("PERMISSION labeled ASK (matches TUI 🟡 ASK semantics)", () => {
+    const chip = STATUS_CHIPS.find((c) => c.key === "PERMISSION");
+    expect(chip?.label).toBe("ASK");
+  });
+
+  test("labels are uniform 3-char abbreviations (single-row width budget)", () => {
+    for (const c of STATUS_CHIPS) {
+      expect(c.label.length).toBe(3);
+    }
+  });
+
+  test("keys are unique and non-empty", () => {
+    const keys = STATUS_CHIPS.map((c) => c.key);
+    expect(new Set(keys).size).toBe(keys.length);
+    for (const k of keys) expect(k.length).toBeGreaterThan(0);
+  });
+});
+
+describe("visibleChips", () => {
+  test("keeps only nonzero counts in definition order", () => {
+    const counts = { BUSY: 3, IDLE: 13, ERROR: 0, PERMISSION: 0, RETRY: 0, UNKNOWN: 0, ARCHIVED: 0 };
+    expect(visibleChips(counts).map((c) => c.key)).toEqual(["BUSY", "IDLE"]);
+  });
+
+  test("all-zero counts yield empty list (filter bar hidden entirely)", () => {
+    const counts = { BUSY: 0, IDLE: 0, ERROR: 0, PERMISSION: 0, RETRY: 0, UNKNOWN: 0, ARCHIVED: 0 };
+    expect(visibleChips(counts)).toEqual([]);
+  });
+
+  test("preserves priority order across mixed nonzero statuses", () => {
+    const counts = { ARCHIVED: 2, IDLE: 5, BUSY: 1, ERROR: 4 };
+    expect(visibleChips(counts).map((c) => c.key)).toEqual(["ERROR", "BUSY", "IDLE", "ARCHIVED"]);
+  });
+
+  test("adversarial — undefined/missing counts treated as zero", () => {
+    expect(visibleChips(undefined as any)).toEqual([]);
+    expect(visibleChips({} as any)).toEqual([]);
+    expect(visibleChips({ BUSY: 2 } as any).map((c: any) => c.key)).toEqual(["BUSY"]);
+  });
+});
+
+describe("filterActive", () => {
+  test("empty object is inactive", () => {
+    expect(filterActive({})).toBe(false);
+  });
+
+  test("undefined/null are inactive", () => {
+    expect(filterActive(undefined)).toBe(false);
+    expect(filterActive(null)).toBe(false);
+  });
+
+  test("truthy key is active", () => {
+    expect(filterActive({ BUSY: true })).toBe(true);
+    expect(filterActive({ BUSY: false, ERROR: true })).toBe(true);
+  });
+
+  test("falsy-value keys are treated as inactive (dirty data defense)", () => {
+    // toggleStatusFilter 只产生真值 key，但外部可能传入 {X:false} 之类的
+    // 脏数据——与 sessionMatchesFilter 语义一致：视为未激活。
+    expect(filterActive({ BUSY: false })).toBe(false);
+    expect(filterActive({ BUSY: false, IDLE: false })).toBe(false);
+  });
+});
+
+describe("toggleStatusFilter", () => {
+  test("adds an absent status", () => {
+    expect(toggleStatusFilter({}, "BUSY")).toEqual({ BUSY: true });
+  });
+
+  test("removes a present status", () => {
+    expect(toggleStatusFilter({ BUSY: true }, "BUSY")).toEqual({});
+  });
+
+  test("toggle does not touch other keys", () => {
+    const state = { BUSY: true, ERROR: true };
+    expect(toggleStatusFilter(state, "IDLE")).toEqual({
+      BUSY: true,
+      ERROR: true,
+      IDLE: true,
+    });
+    expect(toggleStatusFilter(state, "BUSY")).toEqual({ ERROR: true });
+  });
+
+  test("is immutable (input state unchanged)", () => {
+    const state = { BUSY: true };
+    const next = toggleStatusFilter(state, "ERROR");
+    expect(state).toEqual({ BUSY: true });
+    expect(next).not.toBe(state);
+  });
+
+  test("adversarial — empty string status still toggles its own key", () => {
+    expect(toggleStatusFilter({}, "")).toEqual({ "": true });
+    expect(toggleStatusFilter({ "": true }, "")).toEqual({});
+  });
+});
+
+describe("sessionMatchesFilter", () => {
+  test("empty filter matches everything", () => {
+    expect(sessionMatchesFilter({ status: "BUSY" }, {})).toBe(true);
+    expect(sessionMatchesFilter({ status: "WHATEVER" }, {})).toBe(true);
+  });
+
+  test("active filter matches own status only", () => {
+    const filter = { BUSY: true, RETRY: true };
+    expect(sessionMatchesFilter({ status: "BUSY" }, filter)).toBe(true);
+    expect(sessionMatchesFilter({ status: "RETRY" }, filter)).toBe(true);
+    expect(sessionMatchesFilter({ status: "IDLE" }, filter)).toBe(false);
+    expect(sessionMatchesFilter({ status: "busy" }, filter)).toBe(false);
+  });
+
+  test("undefined/null filter matches everything", () => {
+    expect(sessionMatchesFilter({ status: "IDLE" }, undefined as any)).toBe(true);
+    expect(sessionMatchesFilter({ status: "IDLE" }, null as any)).toBe(true);
+  });
+
+  test("adversarial — undefined session with active filter is false, with empty filter true", () => {
+    expect(sessionMatchesFilter(undefined, { BUSY: true })).toBe(false);
+    expect(sessionMatchesFilter(null, { BUSY: true })).toBe(false);
+    expect(sessionMatchesFilter(undefined, {})).toBe(true);
+  });
+});
+
+describe("filterSessionsKeepingAncestors", () => {
+  test("keeps matched node plus full ancestor chain, prunes unmatched branches", () => {
+    // 树形：root(IDLE) → mid(BUSY) → leaf(IDLE)；root → leaf2(IDLE)
+    // 勾选 BUSY：mid 命中，root 作为祖先保留；leaf / leaf2 无命中后代 → 剪掉。
+    const flat = [
+      mkSession("root", "IDLE"),
+      mkSession("mid", "BUSY", "root"),
+      mkSession("leaf", "IDLE", "mid"),
+      mkSession("leaf2", "IDLE", "root"),
+    ];
+    const out = filterSessionsKeepingAncestors(flat, { BUSY: true });
+    expect(out.map((s) => s.sessionId)).toEqual(["root", "mid"]);
+  });
+
+  test("multi-status filter keeps each match with its own chain", () => {
+    // root(IDLE) → a(PERMISSION)；other(IDLE) → b(ERROR) → c(IDLE)
+    const flat = [
+      mkSession("root", "IDLE"),
+      mkSession("a", "PERMISSION", "root"),
+      mkSession("other", "IDLE"),
+      mkSession("b", "ERROR", "other"),
+      mkSession("c", "IDLE", "b"),
+    ];
+    const out = filterSessionsKeepingAncestors(flat, {
+      PERMISSION: true,
+      ERROR: true,
+    });
+    expect(out.map((s) => s.sessionId)).toEqual(["root", "a", "other", "b"]);
+  });
+
+  test("ancestor-only match keeps ancestor alone (descendants pruned)", () => {
+    // root(BUSY) → leaf(IDLE)：勾选 BUSY 只保留 root，leaf 剪掉。
+    const flat = [mkSession("root", "BUSY"), mkSession("leaf", "IDLE", "root")];
+    const out = filterSessionsKeepingAncestors(flat, { BUSY: true });
+    expect(out.map((s) => s.sessionId)).toEqual(["root"]);
+  });
+
+  test("empty filter returns all sessions unchanged", () => {
+    const flat = [mkSession("a", "BUSY"), mkSession("b", "IDLE")];
+    const out = filterSessionsKeepingAncestors(flat, {});
+    expect(out.map((s) => s.sessionId)).toEqual(["a", "b"]);
+  });
+
+  test("falsy-only filter acts as no filter (consistency with filterActive)", () => {
+    const flat = [mkSession("a", "BUSY"), mkSession("b", "IDLE")];
+    const out = filterSessionsKeepingAncestors(flat, { BUSY: false });
+    expect(out.map((s) => s.sessionId)).toEqual(["a", "b"]);
+  });
+
+  test("original array order is preserved", () => {
+    // 输入顺序 leaf 在前 root 在后（乱序扁平表），输出维持原顺序。
+    const flat = [
+      mkSession("leaf", "BUSY", "root"),
+      mkSession("sibling", "IDLE"),
+      mkSession("root", "IDLE"),
+    ];
+    const out = filterSessionsKeepingAncestors(flat, { BUSY: true });
+    expect(out.map((s) => s.sessionId)).toEqual(["leaf", "root"]);
+  });
+
+  test("dangling parentId stops ancestor walk safely", () => {
+    // parentId 指向不存在的 session：命中节点自身保留，向上标记安全终止。
+    const flat = [mkSession("orphan", "BUSY", "ghost")];
+    const out = filterSessionsKeepingAncestors(flat, { BUSY: true });
+    expect(out.map((s) => s.sessionId)).toEqual(["orphan"]);
+  });
+
+  test("parent cycle terminates and keeps both endpoints", () => {
+    // a.parentId=b、b.parentId=a 构成环：a 命中时 visited 防死循环，a/b 都保留。
+    const flat = [
+      mkSession("a", "BUSY", "b"),
+      mkSession("b", "IDLE", "a"),
+      mkSession("c", "IDLE"),
+    ];
+    const out = filterSessionsKeepingAncestors(flat, { BUSY: true });
+    expect(out.map((s) => s.sessionId)).toEqual(["a", "b"]);
+  });
+
+  test("self-referencing parentId terminates", () => {
+    const flat = [mkSession("self", "BUSY", "self")];
+    const out = filterSessionsKeepingAncestors(flat, { BUSY: true });
+    expect(out.map((s) => s.sessionId)).toEqual(["self"]);
+  });
+
+  test("adversarial — non-array input returns empty", () => {
+    expect(filterSessionsKeepingAncestors(undefined as any, { BUSY: true })).toEqual([]);
+    expect(filterSessionsKeepingAncestors(null as any, { BUSY: true })).toEqual([]);
+  });
+
+  test("adversarial — null/empty-id entries are skipped", () => {
+    const flat = [
+      null as any,
+      mkSession("", "BUSY"),
+      mkSession("ok", "BUSY"),
+    ];
+    const out = filterSessionsKeepingAncestors(flat, { BUSY: true });
+    expect(out.map((s) => s.sessionId)).toEqual(["ok"]);
+  });
+
+  test("empty input with active filter returns empty", () => {
+    expect(filterSessionsKeepingAncestors([], { BUSY: true })).toEqual([]);
+  });
+});
+
+describe("countStatuses", () => {
+  test("counts own status across projects", () => {
+    const projects = [
+      {
+        sessions: [
+          mkSession("a", "BUSY"),
+          mkSession("b", "BUSY"),
+          mkSession("c", "IDLE"),
+        ],
+      },
+      {
+        sessions: [
+          mkSession("d", "PERMISSION"),
+          mkSession("e", "ERROR"),
+          mkSession("f", "BUSY"),
+        ],
+      },
+    ];
+    const counts = countStatuses(projects);
+    expect(counts.BUSY).toBe(3);
+    expect(counts.IDLE).toBe(1);
+    expect(counts.PERMISSION).toBe(1);
+    expect(counts.ERROR).toBe(1);
+    expect(counts.RETRY).toBe(0);
+  });
+
+  test("ignores rowStatus — own status only", () => {
+    // rowStatus 是聚合状态（如父行含 BUSY 子节点），chip 计数只看自身 status。
+    const s = mkSession("a", "IDLE");
+    s.rowStatus = "BUSY";
+    const counts = countStatuses([{ sessions: [s] }]);
+    expect(counts.IDLE).toBe(1);
+    expect(counts.BUSY).toBe(0);
+  });
+
+  test("all 7 chip keys always present, defaulting to 0", () => {
+    const counts = countStatuses([]);
+    expect(Object.keys(counts).sort()).toEqual(
+      ["ERROR", "PERMISSION", "RETRY", "BUSY", "IDLE", "UNKNOWN", "ARCHIVED"].sort(),
+    );
+    for (const k of Object.keys(counts)) expect(counts[k]).toBe(0);
+  });
+
+  test("unknown statuses are ignored", () => {
+    const counts = countStatuses({
+      sessions: [mkSession("a", "WEIRD_STATUS")] as any,
+    } as any);
+    expect(Object.values(counts).every((v) => v === 0)).toBe(true);
+  });
+
+  test("adversarial — undefined/null/missing-sessions projects are safe", () => {
+    expect(() => countStatuses(undefined as any)).not.toThrow();
+    expect(() => countStatuses(null as any)).not.toThrow();
+    const counts = countStatuses([undefined as any, {}, { sessions: undefined }]);
+    expect(counts.BUSY).toBe(0);
   });
 });

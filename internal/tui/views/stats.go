@@ -58,15 +58,15 @@ var (
 				Width(38)
 
 	statsLineStyle = lipgloss.NewStyle().
-				Width(38)
+			Width(38)
 
 	statsLabelStyle = lipgloss.NewStyle().
-				Width(20).
-				Align(lipgloss.Right).
-				Foreground(lipgloss.Color("252"))
+			Width(20).
+			Align(lipgloss.Right).
+			Foreground(lipgloss.Color("252"))
 
 	statsValueStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("229"))
+			Foreground(lipgloss.Color("229"))
 )
 
 // View 渲染全局统计信息。
@@ -79,16 +79,16 @@ func (m StatsModel) View() string {
 	lines = append(lines, statsHeaderStyle.Render("Global Statistics"))
 	lines = append(lines, "")
 	lines = append(lines, statsLineStyle.Render(
-		statsLabelStyle.Render("Total Sessions:") + " " +
+		statsLabelStyle.Render("Total Sessions:")+" "+
 			statsValueStyle.Render(fmt.Sprintf("%d", m.stats.TotalSessions))))
 	lines = append(lines, statsLineStyle.Render(
-		statsLabelStyle.Render("Active Sessions:") + " " +
+		statsLabelStyle.Render("Active Sessions:")+" "+
 			statsValueStyle.Render(fmt.Sprintf("%d", m.stats.ActiveSessions))))
 	lines = append(lines, statsLineStyle.Render(
-		statsLabelStyle.Render("Total Cost:") + " " +
+		statsLabelStyle.Render("Total Cost:")+" "+
 			statsValueStyle.Render(formatCost(m.stats.TotalCost))))
 	lines = append(lines, statsLineStyle.Render(
-		statsLabelStyle.Render("Total Tokens:") + " " +
+		statsLabelStyle.Render("Total Tokens:")+" "+
 			statsValueStyle.Render(formatTokens(m.stats.TotalTokens))))
 
 	statsContent := lipgloss.JoinVertical(lipgloss.Left, lines...)

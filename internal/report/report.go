@@ -160,7 +160,7 @@ func AppendObituary(dir string, date time.Time, rec SessionRecord) error {
 	if err != nil {
 		return fmt.Errorf("open obituary: %w", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	if _, err := f.WriteString(b.String()); err != nil {
 		return fmt.Errorf("append obituary: %w", err)
 	}
