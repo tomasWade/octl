@@ -195,7 +195,11 @@ go test ./...
 
 # 插件测试（需要 Bun）
 cd plugin && bun install && bun test
+```
 
+> 注意：`octl-sidebar.test.ts` 会从 `../internal/plugins/templates/` 导入 TSX 模板，bun 从模板位置向上解析 `@opentui/solid` 时依赖仓库根目录的 `node_modules` symlink（指向 `plugin/node_modules`）。全新 clone 后先在仓库根目录执行 `ln -sfn plugin/node_modules node_modules`（CI 已内置此步骤）。
+
+```bash
 # 手动检查真实数据库 schema；无 DB 时跳过
 go test -run TestRealDBSchema
 ```

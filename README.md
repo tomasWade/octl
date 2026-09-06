@@ -361,6 +361,18 @@ octl plugins --output=~/.config/opencode/plugins/
 
 插件生成后会自动注入与当前二进制匹配的协议版本常量；升级 octl 后需要重新生成插件。
 
+## 测试
+
+```bash
+# 所有 Go 单元测试（使用临时 SQLite 数据库，不碰真实数据）
+go test ./...
+
+# 插件测试（需要 Bun）
+cd plugin && bun install && bun test
+```
+
+> 插件测试会从 `internal/plugins/templates/` 导入 TSX 模板，需要仓库根目录有 `node_modules` symlink（指向 `plugin/node_modules`）。全新 clone 后先执行 `ln -sfn plugin/node_modules node_modules`（CI 已内置此步骤）。
+
 ## 已知限制
 
 - TUI 必须连接 daemon 才能浏览数据；daemon 离线时仅显示离线提示，不再提供静态离线浏览。

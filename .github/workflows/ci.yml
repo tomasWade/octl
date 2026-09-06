@@ -26,6 +26,8 @@ jobs:
       - name: Install dependencies
         working-directory: plugin
         run: bun install --frozen-lockfile
+      - name: Link root node_modules (template TSX resolves deps from repo root)
+        run: ln -sfn plugin/node_modules node_modules
       - name: Test plugins
         working-directory: plugin
         run: bun test
