@@ -139,15 +139,15 @@ type RequestMsg struct {
 
 // ResponseMsg is sent by the daemon in response to a RequestMsg.
 type ResponseMsg struct {
-	Type     string               `json:"type"`
-	ID       string               `json:"id"`
-	Ok       bool                 `json:"ok"`
-	Error    string               `json:"error,omitempty"`
-	States   []SessionState       `json:"states,omitempty"`
-	Projects []SidebarProject     `json:"projects,omitempty"`
-	Messages []MessagePart        `json:"messages,omitempty"`
-	Daily    *DailyDigest         `json:"daily,omitempty"`
-	Report   *ReportResult        `json:"report,omitempty"`
+	Type     string              `json:"type"`
+	ID       string              `json:"id"`
+	Ok       bool                `json:"ok"`
+	Error    string              `json:"error,omitempty"`
+	States   []SessionState      `json:"states,omitempty"`
+	Projects []SidebarProject    `json:"projects,omitempty"`
+	Messages []MessagePart       `json:"messages,omitempty"`
+	Daily    *DailyDigest        `json:"daily,omitempty"`
+	Report   *ReportResult       `json:"report,omitempty"`
 	Archive  []ArchiveSessionRef `json:"archive,omitempty"` // "archiveSessions"：影子库全量引用（含已删线）
 }
 
@@ -238,7 +238,7 @@ type MessagePart struct {
 }
 
 // ArchiveSessionRef 是 "archiveSessions" 应答的单条影子库 session 引用
-//（含已删线），供 CLI 模糊匹配候选池使用。
+// （含已删线），供 CLI 模糊匹配候选池使用。
 type ArchiveSessionRef struct {
 	SessionID   string `json:"sessionId"`
 	Title       string `json:"title"`

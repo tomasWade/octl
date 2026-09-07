@@ -1,21 +1,10 @@
-// testmain_test.go：daemon 包测试的全局隔离——底片/讣告默认目录重定向
-// 到临时目录，防止 handleDeleteAction 等走 defaultReportDir() 的代码
-// 把测试数据写进真实的 ~/.local/share/opencode/daily/。
+// Package daemon 测试无全局 setup 需求：底片目录重定向随周期落盘一并退役
+// （writeReport 仅在显式传 dir 的测试中执行，不会写真实 ~/.local/share/opencode/daily/）。
+// 保留空 TestMain 以便将来挂全局夹具。
 package daemon
 
 import (
-	"os"
 	"testing"
 )
 
-func TestMain(m *testing.M) {
-	dir, err := os.MkdirTemp("", "octl-daemon-test-report-*")
-	if err != nil {
-		os.Stderr.WriteString("testmain: tempdir: " + err.Error() + "\n")
-		os.Exit(1)
-	}
-	setDefaultReportDirForTest(dir)
-	code := m.Run()
-	os.RemoveAll(dir)
-	os.Exit(code)
-}
+var _ = testing.Short

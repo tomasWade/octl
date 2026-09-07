@@ -19,10 +19,6 @@ import (
 // 周期只决定"事件触发之外的最大滞后"，5 分钟绰绰有余。
 const shadowSyncInterval = 5 * time.Minute
 
-// retentionCheckInterval 是保留期清理检查周期（实际清理最多一天一次，
-// 由 meta:retention_last_run 节流）。
-const retentionCheckInterval = 1 * time.Hour
-
 // shadowUpsertSessionRows 是镜像核心：upsert + 条件复活。两个入口共用：
 //   - shadowUpsertDBRows：水位对账路径（db.ShadowSessionRow 投影）
 //   - shadowUpsertLiveSessions：30s DB 同步路径（types.Session 全量新鲜行）

@@ -154,21 +154,3 @@ func (sm *StateManager) shadowPurgeAction(action ActionMsg) manage.Summary {
 	}
 	return summary
 }
-
-// reportDirOverride 供测试注入默认底片目录；空时用真实默认值。
-var reportDirOverride string
-
-// setDefaultReportDirForTest 注入/恢复默认底片目录（空串恢复默认）。
-func setDefaultReportDirForTest(dir string) { reportDirOverride = dir }
-
-// defaultReportDir 返回底片目录（测试注入值或展开的默认路径）。
-func defaultReportDir() string {
-	if reportDirOverride != "" {
-		return reportDirOverride
-	}
-	d, err := report.ExpandDir("")
-	if err != nil {
-		return ""
-	}
-	return d
-}

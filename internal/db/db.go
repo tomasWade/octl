@@ -487,15 +487,15 @@ ORDER BY m.time_created ASC, p.time_created ASC`
 
 // ShadowSessionRow 是对账用的 session 投影：影子库需要的字段子集。
 type ShadowSessionRow struct {
-	ID          string
-	Title       string
-	ProjectID   string
-	Directory   string
-	CreatedMs   int64
-	UpdatedMs   int64
-	ArchivedMs  int64
-	MsgCount    int64
-	Cost        float64
+	ID         string
+	Title      string
+	ProjectID  string
+	Directory  string
+	CreatedMs  int64
+	UpdatedMs  int64
+	ArchivedMs int64
+	MsgCount   int64
+	Cost       float64
 }
 
 // ShadowMessageRow 是对账用的 message 投影：消息元数据（正文部件另取）。
