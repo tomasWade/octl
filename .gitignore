@@ -33,9 +33,8 @@ Thumbs.db
 # Worktree bun test symlink
 internal/node_modules
 
-# Bun workspace
-bunfig.toml
-plugin/bunfig.toml
+# Bun workspace（根目录允许本地覆盖；plugin/bunfig.toml 为测试必需基础设施，已纳入版本控制）
+/bunfig.toml
 
 # Test backup remnants
 *.bak

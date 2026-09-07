@@ -1,0 +1,3 @@
+# bun test 配置：预加载 solid 响应式构建重写插件（原因见 solid-preload.ts 头注释）。
+[test]
+preload = ["./solid-preload.ts"]

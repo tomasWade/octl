@@ -202,7 +202,9 @@ go test ./...
 cd plugin && bun install && bun test
 ```
 
-> 注意：`octl-sidebar.test.ts` 会从 `../internal/plugins/templates/` 导入 TSX 模板，bun 从模板位置向上解析 `@opentui/solid` 时依赖仓库根目录的 `node_modules` symlink（指向 `plugin/node_modules`）。全新 clone 后先在仓库根目录执行 `ln -sfn plugin/node_modules node_modules`（CI 已内置此步骤）。
+> 注意一：`octl-sidebar.test.ts` 与 `render.test.tsx` 会从 `../internal/plugins/templates/` 导入模板，bun 从模板位置向上解析 `@opentui/solid` 时依赖仓库根目录的 `node_modules` symlink（指向 `plugin/node_modules`）。全新 clone 后先在仓库根目录执行 `ln -sfn plugin/node_modules node_modules`（CI 已内置此步骤）。
+>
+> 注意二：`plugin/bunfig.toml` 的 `[test] preload = ["./solid-preload.ts"]` 必须生效——bun 的 node 条件把 solid-js 解析到 `dist/server.js`（SSR 单次渲染、无响应式），preload 里的 `@opentui/solid/bun-plugin` 会在构建期把它重写为响应式 `dist/solid.js`。没有它，`render.test.tsx` 的信号更新类断言会静默漏过（渲染测试永远测不出动态更新）。`render.test.tsx` 首个用例是 preload 生效的冒烟守卫。渲染测试用 `@opentui/solid` 的 `testRender` 离屏渲染 + `captureCharFrame` 断言真实视觉输出；信号更新后用 `renderOnce()` 驱动重绘（`flush()` 只等调度器空闲，不强制重绘）。组件**禁止**依据响应式数据在函数体 early-return null（Solid 组件只执行一次，挂载期空数据会把组件永久钉死在空态——线上"过滤栏不渲染"的真凶，`render.test.tsx` 的"mount-time null 陷阱"用例是回归守卫），空态判断用 `<Show>` 或表达式子节点；`cond && <jsx/>` 中 cond 为空字符串会产生孤儿文本节点（dev 编译模式抛 Orphan text error），含字符串条件的用三元显式返回 null。
 
 ```bash
 # 手动检查真实数据库 schema；无 DB 时跳过
@@ -237,7 +239,7 @@ go test -run TestRealDBSchema
 - 根包（action_test.go）：fake daemon 端到端（snapshot 候选应答 + action 记录 + result 回放）——delete 模糊匹配/批量去重/零命中/歧义不发 action、create 的 message 与 --dir 默认 cwd/显式覆盖、fork/send 的 SessionID/Message/Directory 留空、result 失败与 result.Error 的退出码、用法错误表驱动、`renderActionResult` 渲染与退出码、`confirmAction` 输入解析、`resolveActionTargets` 去重与整体失败。
 - `internal/tui`（nav_test.go）：ViewType 枚举与 NavItems 三视图顺序、数字键 1/2/3 切换、Tab/Shift+Tab 循环、app 层 `FavoritesToggleRequestMsg`/`FavoritesRemoveRequestMsg` 的 toggle 语义（对已收藏发 `unfavorite`、未收藏发 `favorite` action + 乐观更新）、`daemonViewMsg` 以 `ViewMsg.Favorites` 重建 `favoritesMap`（daemon 权威源，陈旧本地项丢弃）并广播 `FavoritesChangedMsg`。
 - `internal/tui/views`（favorites_test.go）：`rebuildFavoriteIDs` 排序（按 ViewMsg 出现顺序 + 补全未出现 ID）、光标 clamp、Space 多选、f 取消收藏（多选/单条，发 `FavoritesRemoveRequestMsg`）、d 删除（delete action + 收藏移除的 `tea.Sequence`）、滚动窗口、空态提示、状态色映射。
-- `plugin`：事件过滤、buffer FIFO、sidebar helper 函数（含 project/session 折叠、`buildSessionTree` 树重建、`normalizeProject` 字段透传（含 pid/tmux）、`tabTitleFg`/`switchTab` tab 高亮与切换、状态 chip 过滤纯函数（`STATUS_CHIPS` 定义/`visibleChips` 非零筛选/`filterActive`/`sessionMatchesFilter`/`toggleStatusFilter`/`filterSessionsKeepingAncestors` 剪枝保形含祖先链保留/环/悬空 parentId/顺序保持/`countStatuses` 只计自身 status）、`favoritesEmptyHint` 收藏空态提示、`toggleFavoriteImpl` 收藏切换不可变性、`sessionRowColor` 状态点着色、删除相关纯函数 `isGlobalProject`/`buildActionPayload`/`collectDescendantIDs`/`collectProjectSessionIDs`/`confirmDeleteAction`/`removeIdsFromMap`、tmux 跳转 `makeTmuxSessionName`/`focusSession`（注入 runner 验证命令序列）、hook 事件 payload 携带 pid/tmux 字段、`ViewMsg.Favorites` 同步本地 signal 与 isFavorite 兜底）、ViewMsg 解析。
+- `plugin`：事件过滤、buffer FIFO、sidebar helper 函数（含 project/session 折叠、`buildSessionTree` 树重建、`normalizeProject` 字段透传（含 pid/tmux）、`tabTitleFg`/`switchTab` tab 高亮与切换、状态 chip 过滤纯函数（`STATUS_CHIPS` 定义/`visibleChips` 非零筛选/`filterActive`/`sessionMatchesFilter`/`favoriteMatchesFilter` 收藏条目过滤（叶子自身 status、父条目 rowStatus 聚合）/`toggleStatusFilter`/`filterSessionsKeepingAncestors` 剪枝保形含祖先链保留/环/悬空 parentId/顺序保持/`countStatuses` 只计自身 status）、`favoritesEmptyHint` 收藏空态提示、`toggleFavoriteImpl` 收藏切换不可变性、`sessionRowColor` 状态点着色、删除相关纯函数 `isGlobalProject`/`buildActionPayload`/`collectDescendantIDs`/`collectProjectSessionIDs`/`confirmDeleteAction`/`removeIdsFromMap`、tmux 跳转 `makeTmuxSessionName`/`focusSession`（注入 runner 验证命令序列）、hook 事件 payload 携带 pid/tmux 字段、`ViewMsg.Favorites` 同步本地 signal 与 isFavorite 兜底）、ViewMsg 解析。
 
 ## 代码风格与约定
 

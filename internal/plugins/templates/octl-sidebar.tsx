@@ -7,7 +7,7 @@ import { homedir } from "node:os";
 import { exec } from "node:child_process";
 import { promisify } from "node:util";
 import { createConnection, type Socket } from "node:net";
-import { createSignal, createMemo, onCleanup } from "solid-js";
+import { createSignal, createMemo, onCleanup, Show } from "solid-js";
 
 const execAsync = promisify(exec);
 
@@ -769,9 +769,12 @@ function StatusFilterChip(props: {
 }
 
 // 状态过滤栏：单行、只渲染非零状态的 chip（visibleChips），点击切换勾选
-// （可多选组合），作用于「全部」tab 的 project/session 树（剪枝保形，折叠
-// 状态不丢）。默认全不勾 = 不过滤；有勾选时行首出现 ✕ 一键清除——前置而非
-// 行尾，保证极端多 chip 撑满宽度时重置按钮仍可见可达。
+// （可多选组合），作用于两个 tab（全部树剪枝保形 + 收藏列表同语义筛选）。
+// 默认全不勾 = 不过滤；有勾选时行首出现 ✕ 一键清除——前置而非行尾，保证
+// 极端多 chip 撑满宽度时重置按钮仍可见可达。
+// 注意：空态判断必须用 <Show> 而非组件体 early-return null——sidebar 挂载时
+// projects 为空（数据经 socket 异步到达），Solid 组件函数体只执行一次，
+// early-return null 会让组件永久停在空态（mount-time null 陷阱，真机踩过）。
 function StatusFilterBar(props: {
   filter: () => Record<string, boolean>;
   counts: () => Record<string, number>;
@@ -779,31 +782,32 @@ function StatusFilterBar(props: {
   onReset: () => void;
 }) {
   const chips = () => visibleChips(props.counts());
-  if (chips().length === 0) return null;
   return (
-    <box flexDirection="row" paddingY={0.5}>
-      {filterActive(props.filter()) && (
-        <text
-          fg="#f7768e"
-          onMouseDown={(e) => handleMouseDown(e, props.onReset)}
-        >
-          {'✕ '}
-        </text>
-      )}
-      {chips().map((chip) => (
-        <StatusFilterChip
-          chipKey={chip.key}
-          label={chip.label}
-          filter={props.filter}
-          counts={props.counts}
-          onToggle={props.onToggle}
-        />
-      ))}
-    </box>
+    <Show when={chips().length > 0}>
+      <box flexDirection="row" paddingY={0.5}>
+        {filterActive(props.filter()) && (
+          <text
+            fg="#f7768e"
+            onMouseDown={(e) => handleMouseDown(e, props.onReset)}
+          >
+            {'✕ '}
+          </text>
+        )}
+        {chips().map((chip) => (
+          <StatusFilterChip
+            chipKey={chip.key}
+            label={chip.label}
+            filter={props.filter}
+            counts={props.counts}
+            onToggle={props.onToggle}
+          />
+        ))}
+      </box>
+    </Show>
   );
 }
 
-function OctlSidebar(props: {
+export function OctlSidebar(props: {
   projects: SidebarProject[];
   connected: boolean;
   error: string;
@@ -908,7 +912,9 @@ function OctlSidebar(props: {
           onReset={resetStatusFilter}
         />
       )}
-      {props.error && <text fg="#a9b1d6">{friendlyError(props.error)}</text>}
+      {/* 注意 error 用三元而非 &&：error 为空串时 && 会把 "" 渲染成孤儿文本
+          节点（dev 编译模式直接抛 Orphan text error），三元显式返回 null 更稳。 */}
+      {props.error ? <text fg="#a9b1d6">{friendlyError(props.error)}</text> : null}
       {!props.connected && !props.error && (
         <text fg="#a9b1d6">offline</text>
       )}
