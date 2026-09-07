@@ -422,6 +422,20 @@ export function filterSessionsKeepingAncestors(
   return flatSessions.filter((s) => s && s.sessionId && keep.has(s.sessionId));
 }
 
+// 纯函数：判断收藏条目是否命中状态过滤——叶子看自身 status，父条目
+// （hasChildren）额外看 rowStatus 聚合。与「全部」树视图的祖先保留语义对齐：
+// 子代命中时父行保留（树上父行靠祖先链规则，扁平收藏列表没有链，用聚合态
+// 近似），保证两个 tab 过滤结果观感一致。
+export function favoriteMatchesFilter(
+  fav: { status: string; rowStatus: string; hasChildren: boolean } | undefined | null,
+  filter: Record<string, boolean>,
+): boolean {
+  if (!filterActive(filter)) return true;
+  if (!fav) return false;
+  if (filter[fav.status] === true) return true;
+  return fav.hasChildren === true && filter[fav.rowStatus] === true;
+}
+
 // 纯函数：统计全部 project 中各自身 status 的 session 数（chip 徽章计数，
 // 不看 rowStatus 聚合）。只统计 STATUS_CHIPS 覆盖的已知状态，未知状态忽略；
 // 每个已知状态恒有 key（缺省 0），chip 渲染无需判空。
@@ -884,6 +898,16 @@ function OctlSidebar(props: {
           收藏
         </text>
       </box>
+      {/* 状态 chip 过滤栏：全局作用于两个 tab——「全部」树剪枝保形、「收藏」
+          列表按同样语义筛选（favoriteMatchesFilter），勾选状态跨 tab 保持。 */}
+      {props.connected && (
+        <StatusFilterBar
+          filter={statusFilter}
+          counts={statusCounts}
+          onToggle={toggleStatus}
+          onReset={resetStatusFilter}
+        />
+      )}
       {props.error && <text fg="#a9b1d6">{friendlyError(props.error)}</text>}
       {!props.connected && !props.error && (
         <text fg="#a9b1d6">offline</text>
@@ -931,7 +955,17 @@ function OctlSidebar(props: {
               return <text fg="#a9b1d6">(no favorites)</text>;
             }
 
-            return entries.map((fav) => (
+            // 状态过滤同样作用于收藏列表：叶子看自身 status，父条目额外看
+            // rowStatus 聚合（favoriteMatchesFilter），与「全部」树的祖先保留
+            // 语义对齐，两个 tab 过滤观感一致。全被滤掉时给出差异化空态提示。
+            const filtered = entries.filter((fav) =>
+              favoriteMatchesFilter(fav, statusFilter()),
+            );
+            if (filtered.length === 0) {
+              return <text fg="#a9b1d6">(no matching favorites)</text>;
+            }
+
+            return filtered.map((fav) => (
               <box flexDirection="row">
                 {/* 方案 A + span 分段着色：状态点与标题合并为单个 text，间距写在
                     span 字符串内（"● " 尾随空格），规避汉字标题前空格被吞的问题；
@@ -957,13 +991,6 @@ function OctlSidebar(props: {
       )}
       {props.connected && activeTab() === "all" && (
         <box flexDirection="column">
-          {/* 状态 chip 过滤栏：纯客户端过滤「全部」树，剪枝保形；无勾选时全量展示。 */}
-          <StatusFilterBar
-            filter={statusFilter}
-            counts={statusCounts}
-            onToggle={toggleStatus}
-            onReset={resetStatusFilter}
-          />
           {/* 有数据但全被过滤掉时给出明确提示（区别于「无任何 session」）。 */}
           {visibleProjects().length === 0 && props.projects.length > 0 && (
             <text fg="#a9b1d6">(no matching sessions)</text>

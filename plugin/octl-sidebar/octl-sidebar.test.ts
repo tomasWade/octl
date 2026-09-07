@@ -29,6 +29,7 @@ import {
   removeIdsFromMap,
   STATUS_CHIPS,
   visibleChips,
+  favoriteMatchesFilter,
   filterActive,
   sessionMatchesFilter,
   toggleStatusFilter,
@@ -6584,6 +6585,45 @@ describe("filterSessionsKeepingAncestors", () => {
 
   test("empty input with active filter returns empty", () => {
     expect(filterSessionsKeepingAncestors([], { BUSY: true })).toEqual([]);
+  });
+});
+
+describe("favoriteMatchesFilter", () => {
+  test("empty filter matches every entry", () => {
+    expect(favoriteMatchesFilter({ status: "IDLE", rowStatus: "IDLE", hasChildren: false }, {})).toBe(true);
+    expect(favoriteMatchesFilter({ status: "BUSY", rowStatus: "ERROR", hasChildren: true }, {})).toBe(true);
+  });
+
+  test("leaf entry matches own status only", () => {
+    const filter = { BUSY: true };
+    expect(favoriteMatchesFilter({ status: "BUSY", rowStatus: "BUSY", hasChildren: false }, filter)).toBe(true);
+    expect(favoriteMatchesFilter({ status: "IDLE", rowStatus: "BUSY", hasChildren: false }, filter)).toBe(false);
+  });
+
+  test("parent entry also matches aggregated rowStatus (tree ancestor semantics)", () => {
+    // 父条目自身 IDLE、子代 BUSY（rowStatus 聚合为 BUSY）：勾 BUSY 时保留，
+    // 与「全部」树视图的祖先保留规则观感一致。
+    const filter = { BUSY: true };
+    expect(favoriteMatchesFilter({ status: "IDLE", rowStatus: "BUSY", hasChildren: true }, filter)).toBe(true);
+    // 聚合态不命中时不保留。
+    expect(favoriteMatchesFilter({ status: "IDLE", rowStatus: "ERROR", hasChildren: true }, filter)).toBe(false);
+  });
+
+  test("parent whose aggregate matches keeps even when leaf statuses do not", () => {
+    const filter = { ERROR: true };
+    expect(favoriteMatchesFilter({ status: "IDLE", rowStatus: "ERROR", hasChildren: true }, filter)).toBe(true);
+    // hasChildren=false 时 rowStatus 不参与判定（叶子看自身 status）。
+    expect(favoriteMatchesFilter({ status: "IDLE", rowStatus: "ERROR", hasChildren: false }, filter)).toBe(false);
+  });
+
+  test("adversarial — falsy-only filter acts as no filter", () => {
+    expect(
+      favoriteMatchesFilter({ status: "IDLE", rowStatus: "IDLE", hasChildren: false }, { BUSY: false }),
+    ).toBe(true);
+  });
+
+  test("adversarial — undefined entry is false under active filter", () => {
+    expect(favoriteMatchesFilter(undefined as any, { BUSY: true })).toBe(false);
   });
 });
 
