@@ -31,7 +31,7 @@
 ```
 main.go
   ├── query.go               "octl query" 子命令：一次性查询 daemon（snaps/sessions/messages/daily）
-  ├── action.go              "octl delete/create/fork/send" 动作子命令：一次性 action + 等 result
+  ├── action.go              "octl delete/create/fork/send/purge" 动作子命令：一次性 action + 等 result
   ├── report.go               "octl report" 子命令：请求 daemon 生成底片并落盘（日报事实层）
   ├── internal/tui/          Bubble Tea 应用外壳
   │     ├── app.go           顶层模型：视图切换、daemon 连接、消息路由、favoritesMap 共享收藏集合
@@ -45,14 +45,16 @@ main.go
   ├── internal/daemon/       Unix socket daemon + SocketClient
   │     ├── daemon.go        StateManager：事件处理、DB 同步、ViewMsg 构建/广播、action 执行
   │     ├── daily.go         "daily" 请求的时间窗口聚合（新增/活跃/归档/僵尸/卡住 + 摘录名额）
-  │     ├── report.go        底片落盘：writeReport（raw 覆盖写）+ writeObituary（删除前全史讣告）+ 周期触发（4h 覆盖 + 昨日补写）
+  │     ├── report.go        底片按需导出：writeReport（raw 覆盖写，骨架读影子库优先）+ shadowPurgeAction
+  │     ├── shadow.go        影子库对账（水位线增量 + 事件定向 + 删除标记 + 保留期清理）
   │     ├── client.go        TUI 侧 Unix socket 客户端
   │     ├── query.go         QueryOnce：CLI 一次性"订阅+request+收 response"封装（dialSubscribed 与 ActionOnce 共享）
   │     ├── action.go        ActionOnce：CLI 一次性"订阅+action+收 result"封装
   │     └── types.go         SessionState、ViewMsg、wire protocol 消息类型
   ├── internal/db/           只读 SQLite 查询层
   ├── internal/manage/       管理操作封装（delete/export/create/fork/send）
-  ├── internal/report/       日报底片渲染落盘（raw 覆盖写 + 讣告追加，纯机械层）
+  ├── internal/report/       日报底片渲染落盘（raw 覆盖写，纯机械层）
+  ├── internal/shadow/       影子库（~/.local/share/octl/shadow.db）：opencode 镜像 + 删除标记 + purge/保留期
   ├── internal/types/        纯数据模型（Session、Project、MessagePart...）
   ├── cmd/                   辅助脚本
   │     └── dbtest/          针对真实数据库的手动集成测试工具
@@ -143,18 +145,26 @@ go build -o octl .
 - 退出码：`0` 成功；`1` 运行错误（daemon 未运行/超时/`ok:false`，含 `ErrDaemonConnect`/`ErrQueryTimeout` 哨兵）；`2` 用法错误。stdout 只出结果，人读信息走 stderr。
 - 需要 daemon 运行中；query 不直接读 DB（遵守"daemon 是唯一数据中心"）。daemon 对未知 request method 返回 `ok:false` 错误（不静默超时）。
 
-### `report` 子命令（底片落盘，日报事实层）
+### `report` 子命令（底片按需导出，日报事实层）
 
-`octl report` 请求 daemon 生成底片并落盘（走 wire 协议 `report` 方法，daemon 侧执行 `buildDailyDigest` + 逐线 `GetUserSkeleton` + `internal/report` 渲染）：
+`octl report` 请求 daemon 生成底片并落盘（走 wire 协议 `report` 方法，daemon 侧执行 `buildDailyDigest` + 逐线骨架（影子库优先，未接入时 `GetUserSkeleton`）+ `internal/report` 渲染）：
 
 - 默认当日窗口；`--date`（单日）/ `--from [--to]`（范围）；`--dir`（daemon 侧目录覆盖，缺省 `~/.local/share/opencode/daily/`）；`--json`。
-- **文件语义**：`<date>.raw.md` 整体覆盖（临时文件 + rename 原子替换，date 取窗口起点本地日期）；`deleted/<date>.md` session 级追加（`O_APPEND`，永不覆盖）。
+- **文件语义**：`<date>.raw.md` 整体覆盖（临时文件 + rename 原子替换，date 取窗口起点本地日期）。
 - **内容分层（严格机械，无判断）**：机器可读统计注释行（`<!-- stats: {...} -->`）+ 项目分节 + 每 session 元数据（id/标题/msgCount/时间窗/首末摘录）+ 当日用户消息骨架原文（SQL 层 part 截 1000、Go 层单条 2000 rune 上限）。
-- **daemon 自动触发**（`internal/daemon/report.go`）：启动时 + 每 10 分钟检查——当日 raw 缺失或 mtime 超 4h 即覆盖写；昨日 raw 缺失且昨日有活动则补写终版、存在但停在昨日内则刷新。适配非服务器作息（开机即写）。
-- **删除讣告**：`handleDeleteAction` 在执行删除前对展开后（含 cascade）的每个 session 拉全史骨架写讣告；失败只记日志不阻断删除。被删 session 的历史因此不随 DB 消失。
-- 日报 skill 是消费方：叙事文件写 `daily/<date>.md`（判断层）；`octl report` 是它刷新底片的手动入口。完整的 skill 消费方示例见 `examples/skills/六耳/SKILL.md`。
+- **仅手动触发**：周期落盘（4h 覆盖 + 昨日补写）与删除讣告已由影子库取代（见下），`octl report` 是按需导出 md 的唯一入口。
+- 日报 skill 是消费方：叙事文件写 `daily/<date>.md`（判断层）；常规回顾直接查影子库（`octl query messages` / `daily`），需要 md 时才导出。完整的 skill 消费方示例见 `examples/skills/六耳/SKILL.md`。
 
-### 动作子命令（`delete` / `create` / `fork` / `send`，一次性操作，不开 TUI）
+### 影子库（shadow archive，删除不失史）
+
+`~/.local/share/octl/shadow.db`（`internal/shadow`，octl 自有 schema，WAL）：daemon 把 opencode 的 session 元数据 + user/assistant 文本部件（text/reasoning；tool 输出不存）持续镜像进来。
+
+- **写入**：三条水位线（session/message/part 各自按 opencode 侧 `time_updated` 增量，`>=` + 幂等单调 upsert）；事件触发定向对账（`session.created`/`session.idle`）；daemon 停机期靠水位重扫补齐。part 水位独立存在是因为 opencode 里部件更新可晚于消息行。
+- **删除语义**：opencode 侧删除（实时事件 / tombstone 确认 / octl delete action）在影子库只置 `deleted_at_ms`，行永不因删除消失；`handleDeleteAction` 在 BatchDelete **前**同步抢救镜像。误标自愈走 `ResurrectIfNewer`（镜像行 updated_ms 晚于删除时刻才复活）。
+- **读取**：`query messages` 活线读活库（新鲜 + 反映 revert/compaction 后的现行视图）、死线读影子库全史（带 `[deleted]` 标记）；`daily` 口径含被删线（`deletedSessions[]` + active 的 `deleted` 标记）；`archiveSessions` 请求提供全量引用（仅 query 类命令并入候选池，action 类排除）。
+- **真删除唯一出口**：`octl purge <sessionId>...`（只允许清理已从 opencode 消失的线，tty 强制确认）；保留期 `--retention-days`（默认 180，0=永不过期，清理按天节流且跳过 opencode 里仍活着的线，过期不留墓碑）。
+
+### 动作子命令（`delete` / `create` / `fork` / `send` / `purge`，一次性操作，不开 TUI）
 
 `octl delete/create/fork/send` 在 flag 解析前拦截（与 plugins/query 同机制），一次性向 daemon 发送 action、同步等待 result 后退出。走 `internal/daemon.ActionOnce`：新连接 → subscribe（复用无推送的 `query` 频道）→ 发 action → 读循环跳过 `progress`/`subscribed`、按 type 匹配收 `result` 后断开；版本不匹配的错误 `response` 透传为 error。daemon 侧复用 wire 协议既有 action 分发与执行路径，零改动。
 
@@ -231,9 +241,11 @@ go test -run TestRealDBSchema
 - `internal/db`（daily_test.go）：`GetMessageActivity` 窗口边界（半开区间含 from 排 to/空窗口）、`GetSessionExcerpts` 角色定位（user/assistant/缺失角色/不存在 session）、窗口边界（assistant 只受 to 限制）、单 part SQL 预截断。
 - `internal/daemon`（action_test.go）：`ActionOnce` 全链路（favorite/unknown action 经真实 StateManager）、daemon 未运行、静默连接超时、`resolveActionDirectory` 显式透传/DB 补全/session 不存在/无 directory 报错、fork 缺 Directory 且 session 不存在时在 exec 前失败、`expandSessionTree` 子树展开表驱动（多级后代/多输入去重/parent 环终止/自引用按叶子/未知 ID 保留/空输入）与 `handleDeleteAction` 级联集成（Cascade=true 时 summary.Results 的 ID 集合覆盖全子树、缺省 false 不展开只删请求 ID——保证既有客户端语义不变）。
 - 根包（query_test.go）：`--nums` 解析全语法形态与钳制、消息按 MessageID 分组、模糊匹配（大小写/前缀/零命中/多命中）、ID 展示规范化、相对年龄、ANSI 感知补齐、`reorderQueryArgs` 参数重排（含 daily 值型 flag）、`parseDailyWindow` 全形态（缺省今天/单日/互斥/只给 to/from>=to/时间格式）、daily 用法错误退出码、`renderDaily` 渲染 smoke（均在连接 daemon 前校验）。
-- `internal/report`（report_test.go）：raw 渲染（统计注释行/项目分节/骨架时间戳真值防 layout 字面量回归/oneLine 压行/空态）、覆盖写无 tmp 残留、讣告追加语义与顺序、ExpandDir。
+- `internal/report`（report_test.go）：raw 渲染（统计注释行/项目分节/骨架时间戳真值防 layout 字面量回归/oneLine 压行/空态）、覆盖写无 tmp 残留、ExpandDir。
 - `internal/db`（daily_test.go 之 TestGetUserSkeleton）：role 过滤、多 part 拼接、SQL 层 1000 / Go 层 2000 rune 双重截断、窗口半开区间、空 session。
-- `internal/daemon`（report_test.go + testmain_test.go）：writeReport 落盘产物、maybeWriteReports 节流（缺失即写 / 4h 内不重写 / 超 4h 覆盖 / 昨日无活动不建空文件）、handleDeleteAction 前置讣告（CLI 删除失败也不影响讣告已写）、`report` request 参数校验与 dir 覆盖；TestMain 全局注入底片目录防测试污染真实 `~/.local/share/opencode/daily/`。
+- `internal/shadow`（shadow_test.go）：schema 幂等与 v2 迁移、upsert 单调（旧快照不覆盖新）、删除标记（首标记定格/upsert 不复活/ResurrectIfNewer 条件复活）、水位线只增不减、PurgeSessions/PurgeOlderThan（exclude 活线豁免）、读取语义与 db 层对齐（SessionMessages 形状/活动窗口/摘录/骨架截断）。
+- `internal/daemon`（shadow_test.go）：全量回填 + 增量对账（含迟到部件的 part 水位回归）、事件定向对账、tombstone 确认标记、handleDeleteAction 删除前同步抢救（CLI 删除失败也挡不住内容入档）、daily 含被删线（deletedSessions/deleted 标记/僵尸排除已删）、legacy 无影子库路径、messages 影子库优先与回落、purge action（活线拒绝/已删清理）、保留期（过期清理/24h 节流/0 永不/活线豁免）。
+- `internal/daemon`（report_test.go + testmain_test.go）：writeReport 落盘产物、`report` request 参数校验与 dir 覆盖；TestMain 全局注入底片目录防测试污染真实 `~/.local/share/opencode/daily/`。
 - 根包（report_test.go）：printReportUsage 帮助回归、runReport 用法错误（均在连接 daemon 前校验）。
 - 根包（action_test.go）：fake daemon 端到端（snapshot 候选应答 + action 记录 + result 回放）——delete 模糊匹配/批量去重/零命中/歧义不发 action、create 的 message 与 --dir 默认 cwd/显式覆盖、fork/send 的 SessionID/Message/Directory 留空、result 失败与 result.Error 的退出码、用法错误表驱动、`renderActionResult` 渲染与退出码、`confirmAction` 输入解析、`resolveActionTargets` 去重与整体失败。
 - `internal/tui`（nav_test.go）：ViewType 枚举与 NavItems 三视图顺序、数字键 1/2/3 切换、Tab/Shift+Tab 循环、app 层 `FavoritesToggleRequestMsg`/`FavoritesRemoveRequestMsg` 的 toggle 语义（对已收藏发 `unfavorite`、未收藏发 `favorite` action + 乐观更新）、`daemonViewMsg` 以 `ViewMsg.Favorites` 重建 `favoritesMap`（daemon 权威源，陈旧本地项丢弃）并广播 `FavoritesChangedMsg`。

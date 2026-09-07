@@ -22,6 +22,7 @@ import (
 	"github.com/tomasWade/octl/internal/db"
 	"github.com/tomasWade/octl/internal/manage"
 	"github.com/tomasWade/octl/internal/plugins"
+	"github.com/tomasWade/octl/internal/shadow"
 	"github.com/tomasWade/octl/internal/types"
 )
 
@@ -67,6 +68,8 @@ func (cl *clientConn) write(v interface{}) {
 type StateManager struct {
 	db               *db.DB
 	mgr              *manage.Manager
+	shadowDB         *shadow.DB // 影子库（nil = 未接入，走旧路径）
+	retentionDays    int        // 影子库保留期（天）；0 = 永不过期
 	mu               sync.RWMutex
 	stateMap         map[string]*SessionState
 	sessionProcess   map[string]*ProcessInfo       // sessionID -> latest process info
@@ -114,6 +117,13 @@ func NewStateManagerWithSocket(database *db.DB, socketPath string) *StateManager
 // This must be called before the daemon accepts action requests from clients.
 func (sm *StateManager) SetManager(mgr *manage.Manager) {
 	sm.mgr = mgr
+}
+
+// SetShadow 接入影子库并设定保留期（天，0 = 永不过期）。
+// nil 库表示不接入（测试或降级运行），相关路径退回旧行为。
+func (sm *StateManager) SetShadow(sdb *shadow.DB, retentionDays int) {
+	sm.shadowDB = sdb
+	sm.retentionDays = retentionDays
 }
 
 // SnapshotCh returns the read-only snapshot channel for test consumption.
@@ -237,11 +247,12 @@ func (sm *StateManager) Run() error {
 	ticker := time.NewTicker(sm.dbSyncInterval)
 	defer ticker.Stop()
 
-	// 底片落盘检查：启动时先跑一次（开机即写 + 补昨日终版），之后
-	// 每 10 分钟检查一次（当日 raw 超 4h 未刷新才真正覆盖写）。
-	reportTicker := time.NewTicker(reportCheckInterval)
-	defer reportTicker.Stop()
-	sm.maybeWriteReports(time.Now())
+	// 影子库对账：启动先跑一轮（watermark=0 时即全量回填），之后周期增量；
+	// 保留期清理挂在同一节拍上（内部按天节流）。
+	shadowTicker := time.NewTicker(shadowSyncInterval)
+	defer shadowTicker.Stop()
+	sm.shadowReconcileNow()
+	sm.shadowRetentionSweep(time.Now())
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
@@ -281,8 +292,9 @@ func (sm *StateManager) Run() error {
 			// 全量快照持久化（幂等）：收藏 + 卡住态，30s 粒度兜底。
 			sm.saveState()
 
-		case <-reportTicker.C:
-			sm.maybeWriteReports(time.Now())
+		case <-shadowTicker.C:
+			sm.shadowReconcileNow()
+			sm.shadowRetentionSweep(time.Now())
 		}
 	}
 }
@@ -420,7 +432,28 @@ func (sm *StateManager) handleRequestMsg(cl *clientConn, req RequestMsg) {
 			cl.write(ResponseMsg{Type: "response", ID: req.ID, Ok: true, Projects: projects})
 		}
 	case "messages":
-		parts, err := sm.db.GetSessionMessages(req.SessionID)
+		var parts []types.MessagePart
+		var err error
+		// 活线看活库：永远新鲜，且反映 revert/compaction 之后的现行视图
+		//（opencode 的 revert/压缩会真删消息行，影子库按档案语义保留旧
+		// 内容——那是给死线的）。死线（已从 opencode 消失）才走影子库。
+		if sess, serr := sm.db.GetSession(req.SessionID); serr == nil && sess != nil {
+			parts, err = sm.db.GetSessionMessages(req.SessionID)
+		} else if sm.shadowDB != nil {
+			parts, err = sm.shadowDB.SessionMessages(req.SessionID)
+			// 未收录的 session（影子库建立前就已消失的老尸体）回落活库
+			// （两边都空就返回空，与旧行为一致）；HasSession 出错不掩埋。
+			if err == nil && len(parts) == 0 {
+				has, herr := sm.shadowDB.HasSession(req.SessionID)
+				if herr != nil {
+					err = herr
+				} else if !has {
+					parts, err = sm.db.GetSessionMessages(req.SessionID)
+				}
+			}
+		} else {
+			parts, err = sm.db.GetSessionMessages(req.SessionID)
+		}
 		if err != nil {
 			cl.write(ResponseMsg{Type: "response", ID: req.ID, Ok: false, Error: err.Error()})
 			return
@@ -435,6 +468,24 @@ func (sm *StateManager) handleRequestMsg(cl *clientConn, req RequestMsg) {
 			})
 		}
 		cl.write(ResponseMsg{Type: "response", ID: req.ID, Ok: true, Messages: messages})
+	case "archiveSessions":
+		refs := make([]ArchiveSessionRef, 0)
+		if sm.shadowDB != nil {
+			rows, err := sm.shadowDB.ListSessions()
+			if err != nil {
+				cl.write(ResponseMsg{Type: "response", ID: req.ID, Ok: false, Error: err.Error()})
+				return
+			}
+			for _, r := range rows {
+				refs = append(refs, ArchiveSessionRef{
+					SessionID:   r.ID,
+					Title:       r.Title,
+					Deleted:     r.DeletedAtMs != 0,
+					DeletedAtMs: r.DeletedAtMs,
+				})
+			}
+		}
+		cl.write(ResponseMsg{Type: "response", ID: req.ID, Ok: true, Archive: refs})
 	case "daily":
 		if req.From <= 0 || req.To <= req.From {
 			cl.write(ResponseMsg{Type: "response", ID: req.ID, Ok: false,
@@ -568,6 +619,8 @@ func (sm *StateManager) handleActionMsg(cl *clientConn, action ActionMsg) {
 		summary = sm.handleFavoriteAction(action)
 	case "unfavorite":
 		summary = sm.handleUnfavoriteAction(action)
+	case "purge":
+		summary = sm.shadowPurgeAction(action)
 	default:
 		cl.write(ResultMsg{Type: "result", Action: action.Action, Error: "unknown action: " + action.Action})
 		return
@@ -595,13 +648,10 @@ func (sm *StateManager) handleDeleteAction(action ActionMsg) manage.Summary {
 	if action.Cascade {
 		ids = sm.expandSessionTree(ids)
 	}
-	// 删除前写全史讣告（session 级追加，永不覆盖）：删除不可逆，先定格
-	// 底片证据。失败只记日志，不阻断删除——用户删除意图优先。
-	for _, id := range ids {
-		if err := sm.writeObituary(id, ""); err != nil {
-			log.Printf("[daemon] obituary %s: %v", id, err)
-		}
-	}
+	// 删除前同步抢救镜像：此刻 opencode DB 行还在，是唯一确定性定格全史
+	// 的机会（事件路径的抢救大概率扑空——opencode 先删行再广播）。
+	// 同步执行而非 goroutine：必须赶在 BatchDelete 破坏数据之前完成。
+	sm.shadowReconcileSessions(ids)
 	var sessions []types.Session
 	for _, id := range ids {
 		sessions = append(sessions, types.Session{ID: id})
@@ -621,14 +671,18 @@ func (sm *StateManager) handleDeleteAction(action ActionMsg) manage.Summary {
 
 	// 删除成功的 session 同步从收藏中移除（剪枝）。
 	sm.mu.Lock()
+	var deletedOK []string
 	for _, r := range summary.Results {
 		if r.Success {
 			sm.removeFavorite(r.SessionID)
+			deletedOK = append(deletedOK, r.SessionID)
 		}
 	}
 	sm.mu.Unlock()
 	// 收藏剪枝后聚合落盘（goroutine 自取锁）。
 	go sm.saveState()
+	// 影子库标记删除（opencode 的 session.deleted 事件也会到，幂等）。
+	go sm.shadowMarkDeleted(deletedOK)
 
 	return summary
 }
@@ -1406,6 +1460,8 @@ func (sm *StateManager) processEvent(raw []byte) {
 		state.Tombstone = false
 		sm.updateProcessInfo(sid, eventPID(evt), eventStr(evt, "tmuxPane"), eventStr(evt, "tmuxSession"), seen)
 		sm.mu.Unlock()
+		// 回合结束即定格：把刚完成的对话增量镜像进影子库。
+		go sm.shadowReconcileSessions([]string{sid})
 
 	case "session.created":
 		sid := eventSID(evt)
@@ -1427,6 +1483,8 @@ func (sm *StateManager) processEvent(raw []byte) {
 		state.Tombstone = false
 		sm.updateProcessInfo(sid, eventPID(evt), eventStr(evt, "tmuxPane"), eventStr(evt, "tmuxSession"), seen)
 		sm.mu.Unlock()
+		// 新生即镜像：压缩"创建后、对账前被删"的抢救盲区。
+		go sm.shadowReconcileSessions([]string{sid})
 
 	case "session.deleted":
 		sid := eventSID(evt)
@@ -1438,6 +1496,11 @@ func (sm *StateManager) processEvent(raw []byte) {
 		sm.removeFavorite(sid) // 实时剪枝：hook 活跃时被删除的 session 同步移出收藏
 		sm.mu.Unlock()
 		go sm.saveState()
+		// 先尽力抢救（opencode 通常已删 DB，扑空无害），再标记删除时刻。
+		go func() {
+			sm.shadowReconcileSessions([]string{sid})
+			sm.shadowMarkDeleted([]string{sid})
+		}()
 
 	case "session.error":
 		sid := eventSID(evt)
@@ -1740,15 +1803,27 @@ func (sm *StateManager) syncFromDB() error {
 	}
 
 	// Tombstone sweep: sessions in memory that are not in the DB.
+	var tombstoneConfirmed []string
 	for id, state := range sm.stateMap {
 		if !dbIDs[id] {
 			if state.Tombstone {
 				delete(sm.stateMap, id)
+				tombstoneConfirmed = append(tombstoneConfirmed, id)
 			} else {
 				state.Tombstone = true
 			}
 		}
 	}
+	// 连续两个周期缺席 → 判定外部删除，影子库只做标记不删行（goroutine
+	// 逃出锁作用域；影子库自身并发安全）。
+	if len(tombstoneConfirmed) > 0 {
+		go sm.shadowMarkDeleted(tombstoneConfirmed)
+	}
+
+	// 影子库 session 镜像：把刚读到的新鲜全量行喂进去（goroutine 逃锁）。
+	// 归档（opencode setArchived 不 bump time_updated）与改标题等无水位
+	// 的字段变化靠这条 30s 路径收敛——影子库的 daily 归档分类依赖它。
+	go sm.shadowUpsertLiveSessions(sessions)
 
 	// 收藏剪枝：外部删除（如 opencode CLI）的 session 在 30 s DB 同步周期内被
 	// 检测到，对应的收藏 ID 同步移除。

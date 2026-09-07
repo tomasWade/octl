@@ -50,6 +50,8 @@ func runActionCommand(verb string, args []string) int {
 		return runActionForkSend("fork", args)
 	case "send":
 		return runActionForkSend("send", args)
+	case "purge":
+		return runActionPurge(args)
 	default:
 		fmt.Fprintf(os.Stderr, "未知动作 %q\n", verb)
 		return queryExitUsage
@@ -87,7 +89,7 @@ func runActionDelete(args []string) int {
 		return code
 	}
 
-	cands, err := fetchQueryCandidates(*socketPath, timeout)
+	cands, err := fetchQueryCandidates(*socketPath, timeout, false)
 	if err != nil {
 		return cliFatal("octl delete", err)
 	}
@@ -115,6 +117,49 @@ func runActionDelete(args []string) int {
 		return cliFatal("octl delete", err)
 	}
 	return renderActionResult(os.Stdout, res, *asJSON, titles)
+}
+
+// runActionPurge 处理 "octl purge <sessionId>..."：影子库的唯一真删除
+// 出口。目标必须是已从 opencode 删除的 session（daemon 侧校验），因此
+// 不做模糊匹配（被删 session 不在活跃列表里），直接收原始 ID。
+// purge 不可逆——档案里彻底消失，不留给墓碑——tty 下强制确认。
+func runActionPurge(args []string) int {
+	fs, asJSON, socketPath, timeoutSec := newActionFlagSet("purge")
+	assumeYes := fs.Bool("yes", false, "skip the confirmation prompt")
+	fs.Usage = func() { printActionUsage(fs.Output(), "purge") }
+	flags, positional := reorderArgs(args, actionValueFlags)
+	_ = fs.Parse(flags) // ExitOnError：出错时已 os.Exit
+
+	if len(positional) < 1 {
+		fmt.Fprintln(os.Stderr, "缺少 <sessionId> 参数（只收完整 ID，可多个；只允许清理已从 opencode 删除的 session）")
+		printActionUsage(os.Stderr, "purge")
+		return queryExitUsage
+	}
+	timeout, code := actionTimeout(*timeoutSec)
+	if code >= 0 {
+		return code
+	}
+
+	if !*assumeYes && stdinIsTerminal() {
+		fmt.Fprintf(os.Stderr, "将彻底销毁影子库中的 %d 个 session（不可逆，不留给墓碑）：\n", len(positional))
+		for _, id := range positional {
+			fmt.Fprintf(os.Stderr, "  - %s\n", id)
+		}
+		fmt.Fprint(os.Stderr, "确认？[y/N] ")
+		reader := bufio.NewReader(os.Stdin)
+		line, _ := reader.ReadString('\n')
+		line = strings.ToLower(strings.TrimSpace(line))
+		if line != "y" && line != "yes" {
+			fmt.Fprintln(os.Stderr, "已取消")
+			return queryExitOK
+		}
+	}
+
+	res, err := actionOnce(*socketPath, daemon.ActionMsg{Action: "purge", SessionIDs: positional}, timeout)
+	if err != nil {
+		return cliFatal("octl purge", err)
+	}
+	return renderActionResult(os.Stdout, res, *asJSON, nil)
 }
 
 // runActionCreate 处理 "octl create <message>"：在指定目录（默认当前
@@ -173,7 +218,7 @@ func runActionForkSend(verb string, args []string) int {
 		return code
 	}
 
-	cands, err := fetchQueryCandidates(*socketPath, timeout)
+	cands, err := fetchQueryCandidates(*socketPath, timeout, false)
 	if err != nil {
 		return cliFatal("octl "+verb, err)
 	}

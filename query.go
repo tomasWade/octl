@@ -219,7 +219,7 @@ func runQueryMessages(socketPath string, timeout time.Duration, asJSON bool, num
 		fmt.Fprintln(os.Stderr, "messages 需要一个 sessionId 参数（支持模糊匹配）")
 		return queryExitUsage
 	}
-	cands, err := fetchQueryCandidates(socketPath, timeout)
+	cands, err := fetchQueryCandidates(socketPath, timeout, true)
 	if err != nil {
 		return queryFatal(err)
 	}
@@ -485,7 +485,10 @@ type queryCandidate struct {
 // fetchQueryCandidates 收集全部已知 session 作为模糊匹配候选：snapshot 覆盖
 // daemon 追踪的全部 session（含 subsession），listSessions 补充 DB 中的
 // root session（daemon 刚启动、状态尚未完全同步时兜底）。按 ID 去重。
-func fetchQueryCandidates(socketPath string, timeout time.Duration) ([]queryCandidate, error) {
+// includeArchive 额外并入影子库全量（含已删线，标题带 [deleted]）——只有
+// 只读查询（query messages）该开；delete/fork/send 等动作类命令必须关，
+// 否则已删线会制造歧义命中或注定失败的请求。
+func fetchQueryCandidates(socketPath string, timeout time.Duration, includeArchive bool) ([]queryCandidate, error) {
 	seen := map[string]bool{}
 	var out []queryCandidate
 	add := func(id, title string) {
@@ -509,6 +512,20 @@ func fetchQueryCandidates(socketPath string, timeout time.Duration) ([]queryCand
 		for _, p := range lr.Projects {
 			for _, s := range p.Sessions {
 				add(s.SessionID, s.Title)
+			}
+		}
+	}
+	// 影子库全量（含已删线）：让 "octl query messages <已删id>" 可以被
+	// 模糊匹配命中；展示时用 [deleted] 标记。活库候选先入池，去重后
+	// 已删线只在缺席时补充。
+	if includeArchive {
+		if ar, aerr := daemon.QueryOnce(socketPath, "archiveSessions", "", timeout); aerr == nil && ar.Ok {
+			for _, s := range ar.Archive {
+				title := s.Title
+				if s.Deleted {
+					title += " [deleted]"
+				}
+				add(s.SessionID, title)
 			}
 		}
 	}

@@ -32,20 +32,9 @@ func marshalEvent(t *testing.T, typ string, props map[string]interface{}) []byte
 	return data
 }
 
-// setupDBWithData creates a temporary SQLite database, applies the schema,
-// invokes seedFn to insert data, then opens a read-only db.DB on the same
-// file.  The caller owns the returned *db.DB and must close it.
-func setupDBWithData(t *testing.T, seedFn func(wdb *sql.DB)) *db.DB {
-	t.Helper()
-	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "daemon_test.db")
-
-	wdb, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		t.Fatalf("open write DB: %v", err)
-	}
-
-	schema := `
+// daemonTestSchema 是测试夹具用的 opencode 库表结构子集（与真实库对齐到
+// octl 读取所需的列；message.time_updated 供影子库水位查询使用）。
+const daemonTestSchema = `
 	CREATE TABLE IF NOT EXISTS project (
 		id TEXT PRIMARY KEY,
 		worktree TEXT,
@@ -86,6 +75,7 @@ func setupDBWithData(t *testing.T, seedFn func(wdb *sql.DB)) *db.DB {
 		session_id TEXT,
 		data TEXT,
 		time_created INTEGER,
+		time_updated INTEGER,
 		FOREIGN KEY (session_id) REFERENCES session(id)
 	);
 	CREATE TABLE IF NOT EXISTS part (
@@ -94,11 +84,26 @@ func setupDBWithData(t *testing.T, seedFn func(wdb *sql.DB)) *db.DB {
 		session_id TEXT,
 		data TEXT,
 		time_created INTEGER,
+		time_updated INTEGER,
 		FOREIGN KEY (message_id) REFERENCES message(id),
 		FOREIGN KEY (session_id) REFERENCES session(id)
 	);
 	`
-	if _, err := wdb.Exec(schema); err != nil {
+
+// setupDBWithData creates a temporary SQLite database, applies the schema,
+// invokes seedFn to insert data, then opens a read-only db.DB on the same
+// file.  The caller owns the returned *db.DB and must close it.
+func setupDBWithData(t *testing.T, seedFn func(wdb *sql.DB)) *db.DB {
+	t.Helper()
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "daemon_test.db")
+
+	wdb, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open write DB: %v", err)
+	}
+
+	if _, err := wdb.Exec(daemonTestSchema); err != nil {
 		wdb.Close()
 		t.Fatalf("create schema: %v", err)
 	}

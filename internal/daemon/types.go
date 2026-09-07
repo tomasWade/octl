@@ -139,15 +139,16 @@ type RequestMsg struct {
 
 // ResponseMsg is sent by the daemon in response to a RequestMsg.
 type ResponseMsg struct {
-	Type     string           `json:"type"`
-	ID       string           `json:"id"`
-	Ok       bool             `json:"ok"`
-	Error    string           `json:"error,omitempty"`
-	States   []SessionState   `json:"states,omitempty"`
-	Projects []SidebarProject `json:"projects,omitempty"`
-	Messages []MessagePart    `json:"messages,omitempty"`
-	Daily    *DailyDigest     `json:"daily,omitempty"`
-	Report   *ReportResult    `json:"report,omitempty"`
+	Type     string               `json:"type"`
+	ID       string               `json:"id"`
+	Ok       bool                 `json:"ok"`
+	Error    string               `json:"error,omitempty"`
+	States   []SessionState       `json:"states,omitempty"`
+	Projects []SidebarProject     `json:"projects,omitempty"`
+	Messages []MessagePart        `json:"messages,omitempty"`
+	Daily    *DailyDigest         `json:"daily,omitempty"`
+	Report   *ReportResult        `json:"report,omitempty"`
+	Archive  []ArchiveSessionRef `json:"archive,omitempty"` // "archiveSessions"：影子库全量引用（含已删线）
 }
 
 // ReportResult 是 "report" 请求的应答体：底片落盘结果（路径 + 统计）。
@@ -191,6 +192,10 @@ type DailyProject struct {
 	ActiveSessions []DailySession `json:"activeSessions"`
 	// ArchivedSessions：窗口内归档的 session（闭环信号），仅引用信息。
 	ArchivedSessions []DailySessionRef `json:"archivedSessions"`
+	// DeletedSessions：窗口内被删除的 session（影子库口径，仅引用信息；
+	// LastActivity 承载删除时刻）。删除即"用户判定的完结"，日报据此
+	// 补记被删线的当日贡献。
+	DeletedSessions []DailySessionRef `json:"deletedSessions"`
 	// SessionCostSum 是活跃 session 的累计 cost 之和（session 级累计，
 	// 非窗口口径——message 表无费用列，窗口内费用不可得）。
 	SessionCostSum float64 `json:"sessionCostSum"`
@@ -208,6 +213,10 @@ type DailySession struct {
 	HasExcerpt           bool   `json:"hasExcerpt"`
 	FirstUserExcerpt     string `json:"firstUserExcerpt,omitempty"`     // 窗口内首条用户消息开头（已截断）
 	LastAssistantExcerpt string `json:"lastAssistantExcerpt,omitempty"` // 截至窗口结束最新 assistant 消息开头（已截断）
+	// Deleted：影子库口径下该 session 已被删除（含窗口内删除与更早删除
+	// 但窗口内仍有消息两种情形）。DeletedAtMs 是删除时刻（unix ms）。
+	Deleted     bool  `json:"deleted,omitempty"`
+	DeletedAtMs int64 `json:"deletedAtMs,omitempty"`
 }
 
 // DailySessionRef 是摘要中不需要文本素材的 session 引用（新增/归档/僵尸）。
@@ -226,6 +235,15 @@ type MessagePart struct {
 	Role        string `json:"role"`
 	Text        string `json:"text"`
 	TimeCreated int64  `json:"timeCreated"`
+}
+
+// ArchiveSessionRef 是 "archiveSessions" 应答的单条影子库 session 引用
+//（含已删线），供 CLI 模糊匹配候选池使用。
+type ArchiveSessionRef struct {
+	SessionID   string `json:"sessionId"`
+	Title       string `json:"title"`
+	Deleted     bool   `json:"deleted"`
+	DeletedAtMs int64  `json:"deletedAtMs,omitempty"`
 }
 
 // ---------------------------------------------------------------------------

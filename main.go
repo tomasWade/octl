@@ -13,6 +13,7 @@ import (
 	"github.com/tomasWade/octl/internal/db"
 	"github.com/tomasWade/octl/internal/manage"
 	"github.com/tomasWade/octl/internal/plugins"
+	"github.com/tomasWade/octl/internal/shadow"
 	"github.com/tomasWade/octl/internal/tui"
 )
 
@@ -36,11 +37,11 @@ func main() {
 		os.Exit(runReport(os.Args[2:]))
 	}
 
-	// 动作类子命令（delete/create/fork/send）在标准 flag 解析前拦截：
-	// 一次性向 daemon 发送 action 并等待 result 后退出，不进入 TUI。
+	// 动作类子命令（delete/create/fork/send/purge）在标准 flag 解析前
+	// 拦截：一次性向 daemon 发送 action 并等待 result 后退出，不进入 TUI。
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
-		case "delete", "create", "fork", "send":
+		case "delete", "create", "fork", "send", "purge":
 			os.Exit(runActionCommand(os.Args[1], os.Args[2:]))
 		}
 	}
@@ -49,6 +50,7 @@ func main() {
 	flag.Bool("tui", false, "Run the TUI (default)")
 	socketPath := flag.String("socket", "", "Path to the octl daemon Unix socket")
 	refreshTime := flag.Int("refresh-time", 5, "Dashboard auto-refresh interval in seconds (0 = disable)")
+	retentionDays := flag.Int("retention-days", 180, "Shadow archive retention in days (0 = keep forever)")
 	showVersion := flag.Bool("version", false, "Print version and exit")
 
 	// 标准 flag 的默认 Usage 只列出主命令 flag，而 plugins 子命令在
@@ -79,7 +81,7 @@ func main() {
 	dbPath := filepath.Join(home, ".local/share/opencode/opencode.db")
 
 	if *daemonMode {
-		runDaemon(dbPath, *socketPath)
+		runDaemon(dbPath, *socketPath, *retentionDays)
 		return
 	}
 
@@ -102,7 +104,8 @@ func printMainUsage(out io.Writer, fs *flag.FlagSet) {
 	fmt.Fprintf(out, "  octl delete [flags]    Delete sessions (fuzzy id match, batch)\n")
 	fmt.Fprintf(out, "  octl create [flags]    Create a session with an initial message\n")
 	fmt.Fprintf(out, "  octl fork [flags]      Fork a session with a new message\n")
-	fmt.Fprintf(out, "  octl send [flags]      Send a message to a session\n\n")
+	fmt.Fprintf(out, "  octl send [flags]      Send a message to a session\n")
+	fmt.Fprintf(out, "  octl purge [flags]     Destroy deleted sessions in the shadow archive\n\n")
 	fmt.Fprintf(out, "Flags:\n")
 	fs.SetOutput(out)
 	fs.PrintDefaults()
@@ -122,6 +125,9 @@ func printMainUsage(out io.Writer, fs *flag.FlagSet) {
 	fmt.Fprintf(out, "             Usage: octl fork <sessionId> <message> [--dir <path>]\n")
 	fmt.Fprintf(out, "  send       Send a message to an existing session\n")
 	fmt.Fprintf(out, "             Usage: octl send <sessionId> <message> [--dir <path>]\n")
+	fmt.Fprintf(out, "  purge      Destroy sessions in the shadow archive (irreversible; only\n")
+	fmt.Fprintf(out, "             sessions already deleted from opencode are eligible)\n")
+	fmt.Fprintf(out, "             Usage: octl purge <sessionId>... [--yes]\n")
 }
 
 // runPlugins 处理 "octl plugins" 子命令：生成配套插件文件到指定目录。
@@ -139,7 +145,9 @@ func runPlugins(args []string) int {
 }
 
 // runDaemon starts the octl state manager and blocks until it exits.
-func runDaemon(dbPath, socketPath string) {
+// 影子库打开失败视为致命错误：它承载"删除不失史"的职责，静默降级会让
+// 用户误以为历史有保障。
+func runDaemon(dbPath, socketPath string, retentionDays int) {
 	database, err := db.New(dbPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "DB error: %v\n", err)
@@ -147,9 +155,22 @@ func runDaemon(dbPath, socketPath string) {
 	}
 	defer func() { _ = database.Close() }()
 
+	shadowPath, err := shadow.DefaultPath()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "shadow db path: %v\n", err)
+		os.Exit(1)
+	}
+	shadowDB, err := shadow.Open(shadowPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "shadow db error: %v\n", err)
+		os.Exit(1)
+	}
+	defer func() { _ = shadowDB.Close() }()
+
 	mgr := manage.New(database)
 	sm := daemon.NewStateManagerWithSocket(database, socketPath)
 	sm.SetManager(mgr)
+	sm.SetShadow(shadowDB, retentionDays)
 	if err := sm.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "state manager: %v\n", err)
 		os.Exit(1)

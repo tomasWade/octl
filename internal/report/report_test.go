@@ -111,40 +111,6 @@ func TestWriteDailyRaw_Empty(t *testing.T) {
 	}
 }
 
-func TestAppendObituary_AppendSemantics(t *testing.T) {
-	dir := t.TempDir()
-	date := testDate()
-	r1 := SessionRecord{SessionID: "ses_x", Title: "T1", Directory: "/a", MsgCount: 2,
-		FirstMs: 1000, LastMs: 2000,
-		Skeleton: []types.SkeletonEntry{{TimeMs: 1000, Text: "全史消息"}}}
-	r2 := SessionRecord{SessionID: "ses_y", Title: "T2", Directory: "/b"}
-	if err := AppendObituary(dir, date, r1); err != nil {
-		t.Fatalf("append 1: %v", err)
-	}
-	if err := AppendObituary(dir, date, r2); err != nil {
-		t.Fatalf("append 2: %v", err)
-	}
-	b, err := os.ReadFile(filepath.Join(dir, "deleted", "2026-09-05.md"))
-	if err != nil {
-		t.Fatalf("read: %v", err)
-	}
-	out := string(b)
-	// 两条讣告共存（追加语义）。
-	for _, want := range []string{
-		"## ses_x | T1 | /a",
-		"## ses_y | T2 | /b",
-		"全史消息",
-	} {
-		if !strings.Contains(out, want) {
-			t.Errorf("讣告缺少 %q:\n%s", want, out)
-		}
-	}
-	// 顺序：r1 在 r2 前。
-	if strings.Index(out, "ses_x") > strings.Index(out, "ses_y") {
-		t.Errorf("追加顺序错误:\n%s", out)
-	}
-}
-
 func TestExpandDir(t *testing.T) {
 	if _, err := ExpandDir(""); err != nil {
 		t.Fatalf("empty dir should use default: %v", err)

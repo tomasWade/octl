@@ -480,3 +480,322 @@ ORDER BY m.time_created ASC, p.time_created ASC`
 	flush()
 	return out, rows.Err()
 }
+
+// ---------------------------------------------------------------------------
+// 影子库增量对账查询（watermark 增量拉取；配合 internal/shadow 使用）
+// ---------------------------------------------------------------------------
+
+// ShadowSessionRow 是对账用的 session 投影：影子库需要的字段子集。
+type ShadowSessionRow struct {
+	ID          string
+	Title       string
+	ProjectID   string
+	Directory   string
+	CreatedMs   int64
+	UpdatedMs   int64
+	ArchivedMs  int64
+	MsgCount    int64
+	Cost        float64
+}
+
+// ShadowMessageRow 是对账用的 message 投影：消息元数据（正文部件另取）。
+type ShadowMessageRow struct {
+	ID        string
+	SessionID string
+	Role      string
+	Agent     string
+	ModelJSON string
+	CreatedMs int64
+	UpdatedMs int64
+}
+
+// ShadowPartRow 是对账用的 part 投影：只含 text / reasoning 部件。
+type ShadowPartRow struct {
+	ID        string
+	MessageID string
+	SessionID string
+	Kind      string
+	Text      string
+	CreatedMs int64
+	UpdatedMs int64
+}
+
+// sessionsUpdatedSince 按 time_updated 水位增量读取 session 投影。
+// watermark=0 时全量（首次即回填）。time_updated 可能同毫秒多行，
+// 用 >= 配合幂等 upsert，重叠重放无害。
+func (d *DB) sessionsUpdatedSince(watermark int64) ([]ShadowSessionRow, error) {
+	rows, err := d.db.Query(`
+SELECT s.id, COALESCE(s.title, ''), COALESCE(s.project_id, ''), COALESCE(s.directory, ''),
+       COALESCE(s.time_created, 0), COALESCE(s.time_updated, 0), COALESCE(s.time_archived, 0),
+       s.cost,
+       (SELECT COUNT(*) FROM message m WHERE m.session_id = s.id)
+FROM session s WHERE COALESCE(s.time_updated, 0) >= ?
+ORDER BY s.time_updated ASC`, watermark)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var out []ShadowSessionRow
+	for rows.Next() {
+		var r ShadowSessionRow
+		if err := rows.Scan(&r.ID, &r.Title, &r.ProjectID, &r.Directory, &r.CreatedMs, &r.UpdatedMs, &r.ArchivedMs, &r.Cost, &r.MsgCount); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// SessionsUpdatedSince 导出 sessionsUpdatedSince（daemon 对账入口）。
+func (d *DB) SessionsUpdatedSince(watermark int64) ([]ShadowSessionRow, error) {
+	return d.sessionsUpdatedSince(watermark)
+}
+
+// messagesUpdatedSince 按 message.time_updated 水位增量读取消息元数据。
+// 流式生成中消息行会持续更新 time_updated，完成态在下一轮对账自然覆盖。
+func (d *DB) messagesUpdatedSince(watermark int64) ([]ShadowMessageRow, error) {
+	rows, err := d.db.Query(`
+SELECT m.id, m.session_id,
+       COALESCE(json_extract(m.data, '$.role'), ''),
+       COALESCE(json_extract(m.data, '$.agent'), ''),
+       COALESCE(json_extract(m.data, '$.model'), '{}'),
+       COALESCE(m.time_created, 0), COALESCE(m.time_updated, 0)
+FROM message m WHERE COALESCE(m.time_updated, 0) >= ?
+ORDER BY m.time_updated ASC`, watermark)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var out []ShadowMessageRow
+	for rows.Next() {
+		var r ShadowMessageRow
+		if err := rows.Scan(&r.ID, &r.SessionID, &r.Role, &r.Agent, &r.ModelJSON, &r.CreatedMs, &r.UpdatedMs); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// MessagesUpdatedSince 导出 messagesUpdatedSince。
+func (d *DB) MessagesUpdatedSince(watermark int64) ([]ShadowMessageRow, error) {
+	return d.messagesUpdatedSince(watermark)
+}
+
+// ShadowPartWithMessage 是部件水位扫描的结果：部件行 + 其父消息元数据
+// （opencode 里 part.time_updated 可能晚于 message.time_updated——流式
+// 收尾时部件还会更新而消息行不再 bump；部件必须按自己的水位扫，
+// 否则消息水位越过后迟到的部件永远不可见）。
+type ShadowPartWithMessage struct {
+	Part    ShadowPartRow
+	Message ShadowMessageRow
+}
+
+// PartsUpdatedSince 按 part.time_updated 水位增量读取 text / reasoning
+// 部件及其父消息元数据。opencode 的 part 表无 time_updated 列时返回
+// 空结果与 nil（旧 schema 兼容：该扫描退化为不生效，部件仍由消息水位
+// 路径覆盖）。
+func (d *DB) PartsUpdatedSince(watermark int64) ([]ShadowPartWithMessage, error) {
+	hasCol, err := d.partHasTimeUpdated()
+	if err != nil || !hasCol {
+		return nil, err
+	}
+	rows, err := d.db.Query(`
+SELECT p.id, p.message_id, COALESCE(p.session_id, ''),
+       COALESCE(json_extract(p.data, '$.type'), ''),
+       COALESCE(json_extract(p.data, '$.text'), ''),
+       COALESCE(p.time_created, 0), COALESCE(p.time_updated, 0),
+       m.id, m.session_id,
+       COALESCE(json_extract(m.data, '$.role'), ''),
+       COALESCE(json_extract(m.data, '$.agent'), ''),
+       COALESCE(json_extract(m.data, '$.model'), '{}'),
+       COALESCE(m.time_created, 0), COALESCE(m.time_updated, 0)
+FROM part p JOIN message m ON m.id = p.message_id
+WHERE COALESCE(p.time_updated, 0) >= ?
+  AND COALESCE(json_extract(p.data, '$.type'), '') IN ('text', 'reasoning')
+  AND COALESCE(json_extract(p.data, '$.text'), '') != ''
+ORDER BY COALESCE(p.time_updated, 0) ASC`, watermark)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var out []ShadowPartWithMessage
+	for rows.Next() {
+		var r ShadowPartWithMessage
+		if err := rows.Scan(
+			&r.Part.ID, &r.Part.MessageID, &r.Part.SessionID, &r.Part.Kind, &r.Part.Text, &r.Part.CreatedMs, &r.Part.UpdatedMs,
+			&r.Message.ID, &r.Message.SessionID, &r.Message.Role, &r.Message.Agent, &r.Message.ModelJSON, &r.Message.CreatedMs, &r.Message.UpdatedMs,
+		); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// partHasTimeUpdated 检查 part 表是否有 time_updated 列（真实库有；
+// 极旧 schema 没有——该扫描退化为不生效，部件仍由消息水位路径覆盖）。
+// 每次实查 PRAGMA：成本可忽略，且避免跨库实例的缓存污染。
+func (d *DB) partHasTimeUpdated() (bool, error) {
+	rows, err := d.db.Query(`PRAGMA table_info(part)`)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = rows.Close() }()
+	has := false
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notNull int
+		var dfltValue interface{}
+		var pk int
+		if err := rows.Scan(&cid, &name, &ctype, &notNull, &dfltValue, &pk); err != nil {
+			return false, err
+		}
+		if name == "time_updated" {
+			has = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return false, err
+	}
+	return has, nil
+}
+
+// chunkSize 控制 IN (...) 列表长度，避开 SQLite 变量数上限。
+const chunkSize = 500
+
+// TextPartsOfMessages 读取给定消息的 text / reasoning 部件（按部件时间升序）。
+// tool / step-start 等部件不进影子库。
+func (d *DB) TextPartsOfMessages(messageIDs []string) ([]ShadowPartRow, error) {
+	var out []ShadowPartRow
+	for len(messageIDs) > 0 {
+		chunk := messageIDs
+		if len(chunk) > chunkSize {
+			chunk = chunk[:chunkSize]
+		}
+		messageIDs = messageIDs[len(chunk):]
+
+		placeholders := strings.Repeat("?,", len(chunk))
+		placeholders = placeholders[:len(placeholders)-1]
+		args := make([]interface{}, len(chunk))
+		for i, id := range chunk {
+			args[i] = id
+		}
+		rows, err := d.db.Query(`
+SELECT p.id, p.message_id, COALESCE(p.session_id, ''),
+       COALESCE(json_extract(p.data, '$.type'), ''),
+       COALESCE(json_extract(p.data, '$.text'), ''),
+       COALESCE(p.time_created, 0), COALESCE(p.time_updated, 0)
+FROM part p
+WHERE p.message_id IN (`+placeholders+`)
+  AND COALESCE(json_extract(p.data, '$.type'), '') IN ('text', 'reasoning')
+  AND COALESCE(json_extract(p.data, '$.text'), '') != ''
+ORDER BY p.time_created ASC`, args...)
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var r ShadowPartRow
+			if err := rows.Scan(&r.ID, &r.MessageID, &r.SessionID, &r.Kind, &r.Text, &r.CreatedMs, &r.UpdatedMs); err != nil {
+				_ = rows.Close()
+				return nil, err
+			}
+			out = append(out, r)
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		_ = rows.Close()
+	}
+	return out, nil
+}
+
+// SessionsByIDs 读取指定 session 投影（定向对账用；顺序不定）。
+// ids 分块查询；不存在的 id 静默跳过。
+func (d *DB) SessionsByIDs(ids []string) ([]ShadowSessionRow, error) {
+	var out []ShadowSessionRow
+	for len(ids) > 0 {
+		chunk := ids
+		if len(chunk) > chunkSize {
+			chunk = chunk[:chunkSize]
+		}
+		ids = ids[len(chunk):]
+
+		placeholders := strings.Repeat("?,", len(chunk))
+		placeholders = placeholders[:len(placeholders)-1]
+		args := make([]interface{}, len(chunk))
+		for i, id := range chunk {
+			args[i] = id
+		}
+		rows, err := d.db.Query(`
+SELECT s.id, COALESCE(s.title, ''), COALESCE(s.project_id, ''), COALESCE(s.directory, ''),
+       COALESCE(s.time_created, 0), COALESCE(s.time_updated, 0), COALESCE(s.time_archived, 0),
+       s.cost,
+       (SELECT COUNT(*) FROM message m WHERE m.session_id = s.id)
+FROM session s WHERE s.id IN (`+placeholders+`)`, args...)
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var r ShadowSessionRow
+			if err := rows.Scan(&r.ID, &r.Title, &r.ProjectID, &r.Directory, &r.CreatedMs, &r.UpdatedMs, &r.ArchivedMs, &r.Cost, &r.MsgCount); err != nil {
+				_ = rows.Close()
+				return nil, err
+			}
+			out = append(out, r)
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		_ = rows.Close()
+	}
+	return out, nil
+}
+
+// MessagesOfSessions 读取指定 session 的全部消息元数据（定向对账用，
+// 用于删除前最后一搏：session 行可能已消失，但若还在则连消息一起抢救）。
+func (d *DB) MessagesOfSessions(sessionIDs []string) ([]ShadowMessageRow, error) {
+	var out []ShadowMessageRow
+	for len(sessionIDs) > 0 {
+		chunk := sessionIDs
+		if len(chunk) > chunkSize {
+			chunk = chunk[:chunkSize]
+		}
+		sessionIDs = sessionIDs[len(chunk):]
+
+		placeholders := strings.Repeat("?,", len(chunk))
+		placeholders = placeholders[:len(placeholders)-1]
+		args := make([]interface{}, len(chunk))
+		for i, id := range chunk {
+			args[i] = id
+		}
+		rows, err := d.db.Query(`
+SELECT m.id, m.session_id,
+       COALESCE(json_extract(m.data, '$.role'), ''),
+       COALESCE(json_extract(m.data, '$.agent'), ''),
+       COALESCE(json_extract(m.data, '$.model'), '{}'),
+       COALESCE(m.time_created, 0), COALESCE(m.time_updated, 0)
+FROM message m WHERE m.session_id IN (`+placeholders+`)
+ORDER BY m.time_created ASC`, args...)
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var r ShadowMessageRow
+			if err := rows.Scan(&r.ID, &r.SessionID, &r.Role, &r.Agent, &r.ModelJSON, &r.CreatedMs, &r.UpdatedMs); err != nil {
+				_ = rows.Close()
+				return nil, err
+			}
+			out = append(out, r)
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		_ = rows.Close()
+	}
+	return out, nil
+}

@@ -144,29 +144,6 @@ func writeSessionBlock(b *strings.Builder, s SessionRecord, timeLayout string) {
 	b.WriteString("\n")
 }
 
-// AppendObituary 向 deleted/<date>.md 追加一条 session 讣告（全史骨架）。
-// O_APPEND 追加写，永不覆盖既有内容。
-func AppendObituary(dir string, date time.Time, rec SessionRecord) error {
-	d := filepath.Join(dir, "deleted")
-	if err := os.MkdirAll(d, 0o755); err != nil {
-		return fmt.Errorf("mkdir %s: %w", d, err)
-	}
-	var b strings.Builder
-	fmt.Fprintf(&b, "## %s | %s | %s\n\n", rec.SessionID, rec.Title, rec.Directory)
-	writeSessionBlock(&b, rec, "01-02 15:04")
-
-	f, err := os.OpenFile(filepath.Join(d, date.Format("2006-01-02")+".md"),
-		os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
-	if err != nil {
-		return fmt.Errorf("open obituary: %w", err)
-	}
-	defer func() { _ = f.Close() }()
-	if _, err := f.WriteString(b.String()); err != nil {
-		return fmt.Errorf("append obituary: %w", err)
-	}
-	return nil
-}
-
 // fmtTime unix 毫秒 → "MM-DD HH:MM"（本地时区）；0 值渲染为 "-"。
 func fmtTime(ms int64) string {
 	if ms <= 0 {

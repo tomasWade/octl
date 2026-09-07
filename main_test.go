@@ -35,6 +35,7 @@ func TestMainUsage_ListsAllSubcommands(t *testing.T) {
 		"octl create [flags]",
 		"octl fork [flags]",
 		"octl send [flags]",
+		"octl purge [flags]", // 影子库真删除出口
 		// query 方法枚举与 query 子命令说明各出现一次 daily
 		"octl query [flags]     One-shot daemon query: snaps | sessions | messages <id> | daily",
 		"Methods: snaps | sessions | messages <sessionId> | daily",
