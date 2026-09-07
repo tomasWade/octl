@@ -1,8 +1,0 @@
-# 私有内容排除清单（publish-github.sh 消费）
-# 语法：路径前缀，一行一条；以 / 结尾表示目录
-# 这些内容只保留在本机/Gitea 私有仓，不发布到 GitHub
-
-.learnings/
-.opencode/
-docs/local-deploy.md
-scripts/deploy-octl.sh

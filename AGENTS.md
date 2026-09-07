@@ -56,11 +56,10 @@ main.go
   ├── internal/types/        纯数据模型（Session、Project、MessagePart...）
   ├── cmd/                   辅助脚本
   │     └── dbtest/          针对真实数据库的手动集成测试工具
-  ├── scripts/               发布与钩子（见「分支模型与发布」）
-  │     ├── publish-github.sh    master→main 快照发布
-  │     ├── publish-exclude.txt  私有内容排除清单
-  │     └── octl.service      systemd 用户服务示例（daemon 常驻）
-  │     └── hooks/pre-push       github remote 只放行 main/tags
+  ├── scripts/               辅助脚本与钩子（见「分支模型与发布」）
+  │     ├── octl.service      systemd 用户服务示例（daemon 常驻）
+  │     └── hooks/pre-push    github remote 只放行 main/tags
+  ├── private/               （不追踪）octl-local 私有运维仓 clone，见「分支模型与发布」
   ├── internal/plugins/      插件模板与生成逻辑
   │     ├── gen.go           go:embed + MD5 + Generate
   │     ├── gen_test.go      生成逻辑测试
@@ -427,17 +426,15 @@ action 执行完成后，daemon 会重新 `buildView()` 并 `pushView()`，所�
 
 ## 分支模型与发布
 
-单仓双分支双 remote 模型：
+两仓模型（2026-09 起，取代旧"单仓双分支快照发布"模型；私有全量历史归档在 Gitea 的 `master-archive` 分支）：
 
-- `master`：私有开发主线，全量历史，只推 `origin`
-- `main`：公开快照分支，**orphan 历史**（与 master 无共同祖先），推 `github` 与 `origin`
-- **两条历史永不 merge**——把 master merge 进 main 会把私有历史带上 GitHub，是本仓唯一致命禁忌
-- 发布 = `./scripts/publish-github.sh --push`：按 `scripts/publish-exclude.txt` 排除清单，把 master 工作区文件同步到 main 的临时 worktree 做快照提交，然后推双 remote
-- 发布内容 = **工作区当前内容**；先 commit 到 master 再发布，禁止把未提交的 WIP 发布成公开快照
-- 新增私有文件（本机配置、部署文档等）必须同步登记进 `scripts/publish-exclude.txt`
-- 防误推：`.git/hooks/pre-push`（源在 `scripts/hooks/pre-push`）对 github remote 只放行 `refs/heads/main` 与 `refs/tags/*`，其余 refspec（含 `--all`/`--mirror`/误推 master）一律 exit 1；钩子不随 clone 传播，新 clone 后按其头部注释重装
-- 发版：`git tag -a v0.x.y main && git push github v0.x.y`——README 的 `go install ...@latest` 依赖 tag 存在；tag 推送后 `.github/workflows/release.yml` 自动交叉编译 linux/darwin × amd64/arm64 二进制（`-X main.version` 注入 tag 号）并创建 GitHub Release
-- 新机器首次配置：见 `scripts/publish-github.sh` 头部注释（remote/fetch/branch/装钩子四步）
+- **产品仓（本仓库）**：单一普通历史，唯一长期分支 `main`，双 upstream——`github`（git@github.com:tomasWade/octl.git，公开正典）与 `origin`（http://nas:30000/haotianyu/opencode-monitor.git，Gitea 私有镜像备份）。**push 即发布**：`git push github main` 后跟 `git push origin main`。
+- **私有运维仓 `octl-local`**（Gitea 私有：http://nas:30000/haotianyu/octl-local.git）：本机部署脚本（`deploy-octl.sh`）、私有部署文档（`local-deploy.md`）、learnings。clone 到本仓库 `private/` 目录内，由 `.git/info/exclude` 排除（`private/setup.sh` 幂等维护；不写入公开 `.gitignore`，连私有目录的存在都不对外暴露）。
+- **WIP 纪律**：未整备的分支/试错 commit 只推 `origin`（Gitea 私有）；推 `github` 前自行 squash/整理 commit 信息。`git clean -fdx` 会删除 `private/`，私有仓改动必须随手 push 到 Gitea。
+- **外部贡献（GitHub PR）**：正常 Merge 即可，本地 `git pull github main` 同步——不存在快照回滚问题（旧模型的 cherry-pick 纪律已随模型退役）。
+- **防误推**：`.git/hooks/pre-push`（源在 `scripts/hooks/pre-push`）对 github remote 只放行 `refs/heads/main` 与 `refs/tags/*`，其余 refspec（含 `--all`/`--mirror`/误推 WIP 分支）一律 exit 1；钩子不随 clone 传播，新 clone 后按其头部注释重装。
+- **发版**：`git tag -a v0.x.y main && git push github v0.x.y`——README 的 `go install ...@latest` 依赖 tag 存在；tag 推送后 `.github/workflows/release.yml` 自动交叉编译 linux/darwin × amd64/arm64 二进制（`-X main.version` 注入 tag 号）并创建 GitHub Release。
+- **新机器首次配置**：clone 产品仓 → `git clone http://nas:30000/haotianyu/octl-local.git private` → `bash private/setup.sh`（详见私有仓 README）。
 
 ## 常见陷阱
 
@@ -450,8 +447,8 @@ action 执行完成后，daemon 会重新 `buildView()` 并 `pushView()`，所�
 - **管理操作由 daemon 执行**：TUI 只发送 action 请求，实际调用 `opencode` CLI 在 daemon 内部完成。
 - **CLI 动作子命令复用 action 协议**：`octl delete/create/fork/send` 与 TUI 走同一条 action 消息通道（`progress`/`result` 写回发起连接），daemon 侧没有专门的 CLI 路径；fork/send 的 `--dir` 缺省由 daemon 经 `resolveActionDirectory` 查 DB 补全，CLI 不要自己猜目录。
 - **收藏由 daemon 统一维护（内存态 + octl-state.json 持久化）**：TUI 的 `favoritesMap` 和 sidebar 的 `favorites` signal 只是 daemon 推送 `ViewMsg.Favorites`/`isFavorite` 的渲染缓存 + 乐观更新层；增删收藏一律通过 `favorite`/`unfavorite` action 发送到 daemon，由 daemon 重新 `buildView()` 推送后调和。收藏不写 SQLite，持久化走 `~/.local/share/opencode/octl-state.json`（变更即写 + 周期快照 + 退出 flush，重启恢复）。不要把收藏直接写进 opencode 的数据库。
-- **不要 merge master 与 main**：orphan 双分支模型，merge 即把私有历史泄上 GitHub（详见「分支模型与发布」）。
-- **发布只走 `./scripts/publish-github.sh --push`，不要手工 push main**；github remote 永远只收 main 和 tags（pre-push 钩子会拦截其余）。
+- **WIP 分支只推 origin，不要推 github**：github remote 永远只收 main 和 tags（pre-push 钩子会拦截其余）；推 github 前自行 squash/整理 commit 信息。
+- **不要把 private/ 提交进仓库**：`.git/info/exclude` 已挡常规操作，禁止 `git add -f private/`；`git clean -fdx` 会删掉 private/，私有仓改动随手 push 到 Gitea（详见「分支模型与发布」）。
 
 ## 发布与部署
 
