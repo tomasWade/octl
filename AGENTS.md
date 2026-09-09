@@ -53,6 +53,7 @@ main.go
   │     └── types.go         SessionState、ViewMsg、wire protocol 消息类型
   ├── internal/db/           只读 SQLite 查询层
   ├── internal/manage/       管理操作封装（delete/export/create/fork/send）
+  ├── internal/paths/        octl 自有数据路径唯一出处（~/.local/share/octl/）
   ├── internal/report/       日报底片渲染落盘（raw 覆盖写，纯机械层）
   ├── internal/shadow/       影子库（~/.local/share/octl/shadow.db）：opencode 镜像 + 删除标记 + purge/保留期
   ├── internal/types/        纯数据模型（Session、Project、MessagePart...）
@@ -122,7 +123,7 @@ go build -o octl .
 | `--daemon` | `false` | 前台启动 daemon 服务 |
 | `--tui` | `false` | 显式启动 TUI（默认） |
 | `--version` | `false` | 打印版本号与协议版本 MD5 后退出 |
-| `--socket` | `~/.local/share/opencode/octl.sock` | Unix socket 路径 |
+| `--socket` | `~/.local/share/octl/octl.sock` | Unix socket 路径 |
 | `--refresh-time` | `5` | 已废弃；TUI 刷新由 daemon 推送驱动 |
 
 另有 `plugins` 子命令：`octl plugins --output=<dir>` 生成配套插件（见下方「启用 opencode 插件」）。
@@ -149,7 +150,7 @@ go build -o octl .
 
 `octl report` 请求 daemon 生成底片并落盘（走 wire 协议 `report` 方法，daemon 侧执行 `buildDailyDigest` + 逐线骨架（影子库优先，未接入时 `GetUserSkeleton`）+ `internal/report` 渲染）：
 
-- 默认当日窗口；`--date`（单日）/ `--from [--to]`（范围）；`--dir`（daemon 侧目录覆盖，缺省 `~/.local/share/opencode/daily/`）；`--json`。
+- 默认当日窗口；`--date`（单日）/ `--from [--to]`（范围）；`--dir`（daemon 侧目录覆盖，缺省 `~/.local/share/octl/daily/`）；`--json`。
 - **文件语义**：`<date>.raw.md` 整体覆盖（临时文件 + rename 原子替换，date 取窗口起点本地日期）。
 - **内容分层（严格机械，无判断）**：机器可读统计注释行（`<!-- stats: {...} -->`）+ 项目分节 + 每 session 元数据（id/标题/msgCount/时间窗/首末摘录）+ 当日用户消息骨架原文（SQL 层 part 截 1000、Go 层单条 2000 rune 上限）。
 - **仅手动触发**：周期落盘（4h 覆盖 + 昨日补写）与删除讣告已由影子库取代（见下），`octl report` 是按需导出 md 的唯一入口。
@@ -178,7 +179,8 @@ go build -o octl .
 
 ### 运行依赖
 
-- TUI 启动时会连接 `~/.local/share/opencode/octl.sock` 上的 daemon。
+- **octl 自有数据统一住在 `~/.local/share/octl/`**（`internal/paths` 是唯一路径出处）：`octl.sock`（socket）、`state.json`（收藏 + 卡住态）、`daily/`（日报底片 + 叙事层）、`shadow.db`（影子库）。不与 opencode 的数据目录混居；旧版落在 opencode 目录下的 state/daily 属一次性存量，已随目录切换手工迁走，代码中不驻留迁移逻辑。
+- TUI 启动时会连接 `~/.local/share/octl/octl.sock` 上的 daemon。
 - 若 daemon 未运行，TUI **不会退出**，右上角显示 `🔴 OFFLINE`，每 5 秒自动重连；恢复后显示 `🟢 ONLINE`。
 - TUI 不再直接读取数据库，所有展示数据来自 daemon 推送的 `ViewMsg`。
 - 数据库路径硬编码为 `~/.local/share/opencode/opencode.db`（见 `main.go` 和 `cmd/dbtest/main.go`）。
@@ -245,7 +247,7 @@ go test -run TestRealDBSchema
 - `internal/db`（daily_test.go 之 TestGetUserSkeleton）：role 过滤、多 part 拼接、SQL 层 1000 / Go 层 2000 rune 双重截断、窗口半开区间、空 session。
 - `internal/shadow`（shadow_test.go）：schema 幂等与 v2 迁移、upsert 单调（旧快照不覆盖新）、删除标记（首标记定格/upsert 不复活/ResurrectIfNewer 条件复活）、水位线只增不减、PurgeSessions/PurgeOlderThan（exclude 活线豁免）、读取语义与 db 层对齐（SessionMessages 形状/活动窗口/摘录/骨架截断）。
 - `internal/daemon`（shadow_test.go）：全量回填 + 增量对账（含迟到部件的 part 水位回归）、事件定向对账、tombstone 确认标记、handleDeleteAction 删除前同步抢救（CLI 删除失败也挡不住内容入档）、daily 含被删线（deletedSessions/deleted 标记/僵尸排除已删）、legacy 无影子库路径、messages 影子库优先与回落、purge action（活线拒绝/已删清理）、保留期（过期清理/24h 节流/0 永不/活线豁免）。
-- `internal/daemon`（report_test.go + testmain_test.go）：writeReport 落盘产物、`report` request 参数校验与 dir 覆盖；TestMain 全局注入底片目录防测试污染真实 `~/.local/share/opencode/daily/`。
+- `internal/daemon`（report_test.go + testmain_test.go）：writeReport 落盘产物、`report` request 参数校验与 dir 覆盖；TestMain 全局注入底片目录防测试污染真实 `~/.local/share/octl/daily/`。
 - 根包（report_test.go）：printReportUsage 帮助回归、runReport 用法错误（均在连接 daemon 前校验）。
 - 根包（action_test.go）：fake daemon 端到端（snapshot 候选应答 + action 记录 + result 回放）——delete 模糊匹配/批量去重/零命中/歧义不发 action、create 的 message 与 --dir 默认 cwd/显式覆盖、fork/send 的 SessionID/Message/Directory 留空、result 失败与 result.Error 的退出码、用法错误表驱动、`renderActionResult` 渲染与退出码、`confirmAction` 输入解析、`resolveActionTargets` 去重与整体失败。
 - `internal/tui`（nav_test.go）：ViewType 枚举与 NavItems 三视图顺序、数字键 1/2/3 切换、Tab/Shift+Tab 循环、app 层 `FavoritesToggleRequestMsg`/`FavoritesRemoveRequestMsg` 的 toggle 语义（对已收藏发 `unfavorite`、未收藏发 `favorite` action + 乐观更新）、`daemonViewMsg` 以 `ViewMsg.Favorites` 重建 `favoritesMap`（daemon 权威源，陈旧本地项丢弃）并广播 `FavoritesChangedMsg`。
@@ -315,7 +317,7 @@ COALESCE(s.time_compacting, 0) as time_compacting,
 ### 进程模型
 
 - `octl --daemon` 启动独立前台进程。
-- 监听 Unix socket：`~/.local/share/opencode/octl.sock`。
+- 监听 Unix socket：`~/.local/share/octl/octl.sock`。
 - TUI 和 sidebar 通过 `internal/daemon.SocketClient` 连接并订阅 `view` 频道。
 
 ### 连接角色
@@ -415,7 +417,7 @@ action 执行完成后，daemon 会重新 `buildView()` 并 `pushView()`，所�
 | `f` | 取消收藏：多选时移除全部选中 session，否则移除光标处 session（发 `FavoritesRemoveRequestMsg`，app 层发 `unfavorite` action 并经 daemon 确认） |
 | `d` | 删除：先发 `delete` action，再发 `FavoritesRemoveRequestMsg`（`tea.Sequence`），确保收藏列表同步清理（daemon 在删除成功时也会自动剪枝收藏） |
 
-收藏数据流（daemon 权威驱动）：daemon 的 `StateManager` 在内存中维护有序收藏集合（`favorites []string` + `favoritesSet map[string]bool`）。dashboard/favorites 视图通过 `FavoritesToggleRequestMsg` / `FavoritesRemoveRequestMsg` 请求 app 层：app 层先乐观更新共享的 `favoritesMap`（`map[string]bool`）并广播 `FavoritesChangedMsg` 给两个子视图，同时按 toggle 语义向 daemon 发送 `favorite`/`unfavorite` action；daemon 执行后重新 `buildView()` 推送，TUI 以 `ViewMsg.Favorites` 重建 `favoritesMap`（daemon 为权威源，陈旧本地项被丢弃），sidebar 以同一字段同步本地 `favorites` signal——两端收藏经 daemon 保持一致。收藏**持久化到 `~/.local/share/opencode/octl-state.json`**（`internal/daemon/state.go`）：变更即异步落盘 + 30s ticker 全量快照 + SIGTERM 退出 flush，daemon 重启后 `restoreState()` 恢复（孤儿收藏交给既有剪枝机制清理）。同一文件还持久化卡住态（PERMISSION/ERROR 的 session 含 permType/errorMsg）：恢复时 `source=event` 保持豁免接管语义，停机期间的解除事件由 hook 的 FIFO 缓冲补发自愈；pid/tmux 映射不恢复（新事件重建）。
+收藏数据流（daemon 权威驱动）：daemon 的 `StateManager` 在内存中维护有序收藏集合（`favorites []string` + `favoritesSet map[string]bool`）。dashboard/favorites 视图通过 `FavoritesToggleRequestMsg` / `FavoritesRemoveRequestMsg` 请求 app 层：app 层先乐观更新共享的 `favoritesMap`（`map[string]bool`）并广播 `FavoritesChangedMsg` 给两个子视图，同时按 toggle 语义向 daemon 发送 `favorite`/`unfavorite` action；daemon 执行后重新 `buildView()` 推送，TUI 以 `ViewMsg.Favorites` 重建 `favoritesMap`（daemon 为权威源，陈旧本地项被丢弃），sidebar 以同一字段同步本地 `favorites` signal——两端收藏经 daemon 保持一致。收藏**持久化到 `~/.local/share/octl/state.json`**（`internal/daemon/state.go`）：变更即异步落盘 + 30s ticker 全量快照 + SIGTERM 退出 flush，daemon 重启后 `restoreState()` 恢复（孤儿收藏交给既有剪枝机制清理）。同一文件还持久化卡住态（PERMISSION/ERROR 的 session 含 permType/errorMsg）：恢复时 `source=event` 保持豁免接管语义，停机期间的解除事件由 hook 的 FIFO 缓冲补发自愈；pid/tmux 映射不恢复（新事件重建）。
 
 ### 创建 / Fork / 发送消息
 
@@ -458,7 +460,7 @@ action 执行完成后，daemon 会重新 `buildView()` 并 `pushView()`，所�
 - **hook 插件不 subscribe**：`octl-hook.js`（由 `octl plugins` 生成）只作为 event source 发送事件，不要改动它去 subscribe；sidebar 插件则需要 subscribe `view` 频道。
 - **管理操作由 daemon 执行**：TUI 只发送 action 请求，实际调用 `opencode` CLI 在 daemon 内部完成。
 - **CLI 动作子命令复用 action 协议**：`octl delete/create/fork/send` 与 TUI 走同一条 action 消息通道（`progress`/`result` 写回发起连接），daemon 侧没有专门的 CLI 路径；fork/send 的 `--dir` 缺省由 daemon 经 `resolveActionDirectory` 查 DB 补全，CLI 不要自己猜目录。
-- **收藏由 daemon 统一维护（内存态 + octl-state.json 持久化）**：TUI 的 `favoritesMap` 和 sidebar 的 `favorites` signal 只是 daemon 推送 `ViewMsg.Favorites`/`isFavorite` 的渲染缓存 + 乐观更新层；增删收藏一律通过 `favorite`/`unfavorite` action 发送到 daemon，由 daemon 重新 `buildView()` 推送后调和。收藏不写 SQLite，持久化走 `~/.local/share/opencode/octl-state.json`（变更即写 + 周期快照 + 退出 flush，重启恢复）。不要把收藏直接写进 opencode 的数据库。
+- **收藏由 daemon 统一维护（内存态 + state.json 持久化）**：TUI 的 `favoritesMap` 和 sidebar 的 `favorites` signal 只是 daemon 推送 `ViewMsg.Favorites`/`isFavorite` 的渲染缓存 + 乐观更新层；增删收藏一律通过 `favorite`/`unfavorite` action 发送到 daemon，由 daemon 重新 `buildView()` 推送后调和。收藏不写 SQLite，持久化走 `~/.local/share/octl/state.json`（变更即写 + 周期快照 + 退出 flush，重启恢复）。不要把收藏直接写进 opencode 的数据库。
 - **WIP 分支只推 origin，不要推 github**：github remote 永远只收 main 和 tags（pre-push 钩子会拦截其余）；推 github 前自行 squash/整理 commit 信息。
 - **不要把 private/ 提交进仓库**：`.git/info/exclude` 已挡常规操作，禁止 `git add -f private/`；`git clean -fdx` 会删掉 private/，私有仓改动随手 push 到 Gitea（详见「分支模型与发布」）。
 

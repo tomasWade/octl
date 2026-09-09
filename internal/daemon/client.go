@@ -6,10 +6,9 @@ import (
 	"fmt"
 	"log"
 	"net"
-	"os"
-	"path/filepath"
 	"sync"
 
+	"github.com/tomasWade/octl/internal/paths"
 	"github.com/tomasWade/octl/internal/plugins"
 )
 
@@ -29,7 +28,7 @@ func NewSocketClient() *SocketClient {
 }
 
 // NewSocketClientWithSocket creates a client for a custom socket path.
-// An empty path falls back to the default ~/.local/share/opencode/octl.sock.
+// An empty path falls back to the default ~/.local/share/octl/octl.sock.
 func NewSocketClientWithSocket(socketPath string) *SocketClient {
 	return &SocketClient{
 		socketPath: socketPath,
@@ -42,11 +41,7 @@ func (c *SocketClient) SocketPath() (string, error) {
 	if c.socketPath != "" {
 		return c.socketPath, nil
 	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("home directory: %w", err)
-	}
-	return filepath.Join(home, socketDirPath, socketFileName), nil
+	return paths.SocketPath()
 }
 
 // Msgs returns the channel of parsed daemon messages. The channel is closed

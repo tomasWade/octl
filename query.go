@@ -60,7 +60,7 @@ func runQuery(args []string) int {
 	dateStr := fs.String("date", "", "daily only: single day, e.g. 2026-09-04 (local timezone)")
 	fromStr := fs.String("from", "", "daily only: window start, e.g. 2026-09-01 or 2026-09-01T14:00")
 	toStr := fs.String("to", "", "daily only: window end (exclusive), defaults to now")
-	socketPath := fs.String("socket", "", "daemon Unix socket path (default ~/.local/share/opencode/octl.sock)")
+	socketPath := fs.String("socket", "", "daemon Unix socket path (default ~/.local/share/octl/octl.sock)")
 	timeoutSec := fs.Int("timeout", 5, "response timeout in seconds")
 	fs.Usage = func() { printQueryUsage(fs.Output()) }
 	// Go flag 遇到第一个非 flag 参数即停止解析，而 query 的自然写法是
@@ -913,7 +913,7 @@ Flags:
   --date <day>      仅 daily：单个自然日（本地时区），如 2026-09-04
   --from <time>     仅 daily：窗口起点，如 2026-09-01 或 2026-09-01T14:00
   --to <time>       仅 daily：窗口终点（不含），缺省为当前时刻
-  --socket <path>   daemon socket 路径（默认 ~/.local/share/opencode/octl.sock）
+  --socket <path>   daemon socket 路径（默认 ~/.local/share/octl/octl.sock）
   --timeout <sec>   响应超时秒数（默认 5）
 
 --nums 选择器语法：

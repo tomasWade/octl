@@ -62,7 +62,7 @@ func runActionCommand(verb string, args []string) int {
 func newActionFlagSet(name string) (*flag.FlagSet, *bool, *string, *int) {
 	fs := flag.NewFlagSet(name, flag.ExitOnError)
 	asJSON := fs.Bool("json", false, "output raw JSON for scripting")
-	socketPath := fs.String("socket", "", "daemon Unix socket path (default ~/.local/share/opencode/octl.sock)")
+	socketPath := fs.String("socket", "", "daemon Unix socket path (default ~/.local/share/octl/octl.sock)")
 	timeoutSec := fs.Int("timeout", actionDefaultTimeoutSec, "result timeout in seconds")
 	return fs, asJSON, socketPath, timeoutSec
 }
@@ -351,7 +351,7 @@ func printActionUsage(w io.Writer, verb string) {
 
 Flags:
   --json            输出完整 JSON（stdout 纯 JSON，供 jq 等脚本消费）
-  --socket <path>   daemon socket 路径（默认 ~/.local/share/opencode/octl.sock）
+  --socket <path>   daemon socket 路径（默认 ~/.local/share/octl/octl.sock）
   --timeout <sec>   等待结果超时秒数（默认 %d）
 `, usage, desc, actionDefaultTimeoutSec)
 	switch verb {

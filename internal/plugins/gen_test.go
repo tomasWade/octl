@@ -61,6 +61,26 @@ func TestProtocolMD5Stable(t *testing.T) {
 	}
 }
 
+// TestGenerateExpandsTilde 验证 --output 传 "~" 前缀时展开为主目录而非
+// 在 cwd 下创建字面 "~" 目录（shell 不展开参数中的 ~，曾实际生成 ./~）。
+func TestGenerateExpandsTilde(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	outDir := "~/.config/opencode/plugins"
+	if err := Generate(outDir); err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
+	for _, name := range []string{"octl-hook.js", "octl-sidebar.tsx"} {
+		if _, err := os.Stat(filepath.Join(home, ".config/opencode/plugins", name)); err != nil {
+			t.Errorf("expected %s under real home: %v", name, err)
+		}
+	}
+	if _, err := os.Stat("~"); err == nil {
+		t.Error("literal '~' directory was created in cwd")
+	}
+}
+
 // TestGenerateMatchesProtocolMD5 验证生成文件中的版本常量值与 ProtocolMD5 一致。
 func TestGenerateMatchesProtocolMD5(t *testing.T) {
 	outDir := t.TempDir()

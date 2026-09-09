@@ -102,19 +102,11 @@ CREATE TABLE IF NOT EXISTS meta (
   value TEXT NOT NULL
 )`
 
-// DefaultPath 返回影子库的默认路径 ~/.local/share/octl/shadow.db。
-// 影子库住在 octl 自己的目录而不是 opencode 的数据目录：它的职责是对抗
-// opencode 世界的删除，不能跟被镜像对象住在同一间屋里。
-func DefaultPath() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("shadow: home directory: %w", err)
-	}
-	return filepath.Join(home, ".local", "share", "octl", "shadow.db"), nil
-}
-
 // Open 打开（必要时创建）影子库。父目录自动创建；启用 WAL 与
 // busy_timeout，写负载极小（低频增量对账），同步策略 NORMAL 足够。
+// 默认路径由 internal/paths.ShadowDBPath 提供（~/.local/share/octl/shadow.db）：
+// 影子库住在 octl 自己的目录而不是 opencode 的数据目录，它的职责是对抗
+// opencode 世界的删除，不能跟被镜像对象住在同一间屋里。
 func Open(path string) (*DB, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, fmt.Errorf("shadow: mkdir: %w", err)

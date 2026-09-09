@@ -12,7 +12,7 @@ import (
 // 的 progress 与 result 都写回发起连接，因此无需常驻读循环，也不依赖
 // SocketClient。
 //
-// socketPath 为空时使用默认路径 ~/.local/share/opencode/octl.sock。
+// socketPath 为空时使用默认路径 ~/.local/share/octl/octl.sock。
 // timeout 覆盖连接、写入与等待结果的全过程。create/fork/send 在 daemon 侧
 // 后台启动 opencode 进程后立即返回 result；delete 为同步执行，批量删除的
 // 耗时与数量成正比，调用方应给足 timeout。

@@ -12,6 +12,7 @@ import (
 	"github.com/tomasWade/octl/internal/daemon"
 	"github.com/tomasWade/octl/internal/db"
 	"github.com/tomasWade/octl/internal/manage"
+	"github.com/tomasWade/octl/internal/paths"
 	"github.com/tomasWade/octl/internal/plugins"
 	"github.com/tomasWade/octl/internal/shadow"
 	"github.com/tomasWade/octl/internal/tui"
@@ -155,7 +156,7 @@ func runDaemon(dbPath, socketPath string, retentionDays int) {
 	}
 	defer func() { _ = database.Close() }()
 
-	shadowPath, err := shadow.DefaultPath()
+	shadowPath, err := paths.ShadowDBPath()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "shadow db path: %v\n", err)
 		os.Exit(1)

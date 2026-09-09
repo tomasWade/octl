@@ -21,14 +21,13 @@ import (
 
 	"github.com/tomasWade/octl/internal/db"
 	"github.com/tomasWade/octl/internal/manage"
+	"github.com/tomasWade/octl/internal/paths"
 	"github.com/tomasWade/octl/internal/plugins"
 	"github.com/tomasWade/octl/internal/shadow"
 	"github.com/tomasWade/octl/internal/types"
 )
 
 const (
-	socketDirPath   = ".local/share/opencode"
-	socketFileName  = "octl.sock"
 	dbSyncInterval  = 30 * time.Second
 	eventStaleAfter = 60 * time.Second
 )
@@ -148,13 +147,13 @@ func (sm *StateManager) Close() {
 	})
 }
 
-// socketPath builds the Unix socket path inside the opencode data directory.
+// socketPath 返回 daemon Unix socket 的默认路径（~/.local/share/octl/octl.sock）。
 func (sm *StateManager) socketPath() (string, error) {
-	home, err := os.UserHomeDir()
+	p, err := paths.SocketPath()
 	if err != nil {
-		return "", fmt.Errorf("home directory: %w", err)
+		return "", fmt.Errorf("resolve socket path: %w", err)
 	}
-	return filepath.Join(home, socketDirPath, socketFileName), nil
+	return p, nil
 }
 
 // isSocketActive reports whether another process is already listening on the

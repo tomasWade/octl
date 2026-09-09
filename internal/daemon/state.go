@@ -1,5 +1,6 @@
 // state.go：daemon 内存态持久化——收藏与卡住态（PERMISSION/ERROR）写
-// ~/.local/share/opencode/octl-state.json，daemon 重启后恢复。
+// ~/.local/share/octl/state.json，daemon 重启后恢复。旧版曾落在
+// opencode 目录（octl-state.json），已随自有数据目录收编迁出。
 //
 // 写入时点（全部收敛到 saveState）：
 //   - 收藏变更即写（handleFavoriteAction / removeFavorite 调用点）
@@ -19,9 +20,11 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/tomasWade/octl/internal/paths"
 )
 
-// daemonState 是 octl-state.json 的落盘结构。
+// daemonState 是 state.json 的落盘结构。
 type daemonState struct {
 	Version   int           `json:"version"`
 	SavedAt   int64         `json:"savedAt"` // unix 毫秒
@@ -47,19 +50,19 @@ var statePathOverride string
 // setStatePathForTest 注入/恢复 state 路径（空串恢复默认）。
 func setStatePathForTest(path string) { statePathOverride = path }
 
-// stateFilePath 返回 octl-state.json 的路径。
+// stateFilePath 返回 state.json 的路径。
 func stateFilePath() string {
 	if statePathOverride != "" {
 		return statePathOverride
 	}
-	home, err := os.UserHomeDir()
+	p, err := paths.StatePath()
 	if err != nil {
 		return ""
 	}
-	return filepath.Join(home, ".local/share/opencode/octl-state.json")
+	return p
 }
 
-// saveState 把当前内存态快照写入 octl-state.json（临时文件 + rename
+// saveState 把当前内存态快照写入 state.json（临时文件 + rename
 // 原子替换）。调用方负责持锁快照数据（本函数内部不再加锁，避免写文件
 // 慢操作持锁）。失败只记日志。
 func (sm *StateManager) saveState() {
@@ -128,7 +131,7 @@ func (sm *StateManager) saveState() {
 	}
 }
 
-// restoreState 从 octl-state.json 恢复收藏与卡住态。必须在 syncFromDB
+// restoreState 从 state.json 恢复收藏与卡住态。必须在 syncFromDB
 // 初次同步之后调用（依赖 stateMap 已含 DB 中的 session）。文件缺失、
 // 解析失败或 version 不符时静默跳过（全新开始）。
 func (sm *StateManager) restoreState() {

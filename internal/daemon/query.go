@@ -7,9 +7,9 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"path/filepath"
 	"time"
 
+	"github.com/tomasWade/octl/internal/paths"
 	"github.com/tomasWade/octl/internal/plugins"
 )
 
@@ -26,16 +26,16 @@ var ErrQueryTimeout = errors.New("daemon response timeout")
 
 // dialSubscribed 建立到 daemon 的连接、设置全流程 deadline 并完成 subscribe
 // 握手（订阅无推送的 query 频道并携带协议版本）。QueryOnce 与 ActionOnce
-// 共用；socketPath 为空时使用默认路径 ~/.local/share/opencode/octl.sock。
+// 共用；socketPath 为空时使用默认路径 ~/.local/share/octl/octl.sock。
 // 调用方负责关闭返回的连接。
 func dialSubscribed(socketPath string, timeout time.Duration) (net.Conn, *bufio.Reader, error) {
 	sockPath := socketPath
 	if sockPath == "" {
-		home, err := os.UserHomeDir()
+		p, err := paths.SocketPath()
 		if err != nil {
-			return nil, nil, fmt.Errorf("home directory: %w", err)
+			return nil, nil, fmt.Errorf("resolve socket path: %w", err)
 		}
-		sockPath = filepath.Join(home, socketDirPath, socketFileName)
+		sockPath = p
 	}
 
 	conn, err := net.DialTimeout("unix", sockPath, timeout)
@@ -65,7 +65,7 @@ func dialSubscribed(socketPath string, timeout time.Duration) (net.Conn, *bufio.
 // QueryOnce 在一条新连接上完成"订阅握手 → request → 收 response"的一次性
 // 交互，供 CLI（octl query）使用，不依赖 SocketClient 的常驻读循环。
 //
-// socketPath 为空时使用默认路径 ~/.local/share/opencode/octl.sock。
+// socketPath 为空时使用默认路径 ~/.local/share/octl/octl.sock。
 // method 与 wire 协议一致："snapshot" | "listSessions" | "messages"（messages
 // 需提供 sessionID）。timeout 覆盖连接、写入与等待响应的全过程。
 // 返回 daemon 应答；Ok=false 时由调用方检查其中的 Error 字段。

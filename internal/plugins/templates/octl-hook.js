@@ -7,7 +7,7 @@ export default {
   id: "octl-hook",
   server: async () => {
     const homeDir = homedir();
-    const socketPath = homeDir + "/.local/share/opencode/octl.sock";
+    const socketPath = homeDir + "/.local/share/octl/octl.sock";
 
     const targetEvents = [
       "session.status", "session.idle", "session.created",

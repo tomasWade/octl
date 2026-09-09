@@ -144,7 +144,7 @@ TUI 启动时会尝试连接 daemon 监听的 Unix socket。如果 daemon 未运
 | `--daemon` | `false` | 前台启动 daemon 服务 |
 | `--tui` | `false` | 显式启动 TUI（默认） |
 | `--version` | `false` | 打印版本号与协议版本 MD5 后退出 |
-| `--socket` | `~/.local/share/opencode/octl.sock` | Unix socket 路径 |
+| `--socket` | `~/.local/share/octl/octl.sock` | Unix socket 路径 |
 | `--refresh-time` | `5` | 已废弃；刷新由 daemon 推送驱动，TUI 不再本地轮询 |
 
 另有子命令 `plugins`（生成 opencode 插件）、`query`（一次性查询）和四个动作子命令 `delete` / `create` / `fork` / `send`（见下两节）。
@@ -229,7 +229,7 @@ octl send 5v1n "继续刚才的任务"
 
 ## 日报底片（octl report）
 
-`octl report` 请求 daemon 生成"底片"（机械事实层）并落盘到 `~/.local/share/opencode/daily/`，供日报 skill / agent 做进一步的叙事总结，或供人工回溯消费（一个完整的 skill 消费方示例见 [examples/skills](examples/skills/六耳/SKILL.md)）：
+`octl report` 请求 daemon 生成"底片"（机械事实层）并落盘到 `~/.local/share/octl/daily/`，供日报 skill / agent 做进一步的叙事总结，或供人工回溯消费（一个完整的 skill 消费方示例见 [examples/skills](examples/skills/六耳/SKILL.md)）：
 
 ```bash
 octl report                          # 今天（覆盖写）
@@ -249,7 +249,7 @@ octl 包含一个独立的守护进程（daemon），通过 Unix socket 接收 o
 **daemon 需要单独启动**：`octl --daemon`。它监听以下 socket 路径：
 
 ```
-~/.local/share/opencode/octl.sock
+~/.local/share/octl/octl.sock
 ```
 
 守护进程会：
@@ -257,7 +257,7 @@ octl 包含一个独立的守护进程（daemon），通过 Unix socket 接收 o
 2. 每 30 秒定时同步数据库，修正过期或丢失的事件状态
 3. 通过 Unix socket 接收 11 类实时事件（session.status、session.idle、session.created、session.deleted、session.error、permission.asked、permission.replied、question.asked、question.replied、question.rejected、session.compacted）
 4. 将完整的 `ViewMsg`（projects / sessions / stats / favorites）通过 Unix socket 推送给已订阅的 TUI 和 sidebar 客户端
-5. 接收并执行 TUI 发来的管理操作请求（delete / export / create / fork / send / favorite / unfavorite），收藏由 daemon 统一维护并持久化到 `~/.local/share/opencode/octl-state.json`（重启恢复）
+5. 接收并执行 TUI 发来的管理操作请求（delete / export / create / fork / send / favorite / unfavorite），收藏由 daemon 统一维护并持久化到 `~/.local/share/octl/state.json`（重启恢复）
 
 ### 安装 opencode 插件
 
@@ -411,7 +411,7 @@ Session 的 **Status** 列显示 daemon 推送的实时状态（需连接 openco
 - 空收藏时显示提示 `No favorites yet — press f in Manage to favorite a session`。
 - 行格式：`状态图标 + 标题`，光标行带 `▶` 前缀，多选行带 `✓` 前缀并以紫色高亮。
 
-> 收藏由 **daemon 统一维护（内存态）**：收藏的权威数据源是 daemon 推送的 `ViewMsg.Favorites` 与每个 session 的 `isFavorite` 字段。TUI 按 `f`、sidebar 点击标题时，前端乐观更新后向 daemon 发送 `favorite` / `unfavorite` action，daemon 执行后重新推送 `ViewMsg` 调和；删除 session 时 daemon 自动剪枝收藏。TUI 与 sidebar 的收藏状态经 daemon 保持一致。收藏不写 opencode 的数据库——持久化走 daemon 自己的 `~/.local/share/opencode/octl-state.json`（变更即写 + 周期快照 + 退出 flush，重启恢复），孤儿收藏由既有剪枝机制清理。
+> 收藏由 **daemon 统一维护（内存态）**：收藏的权威数据源是 daemon 推送的 `ViewMsg.Favorites` 与每个 session 的 `isFavorite` 字段。TUI 按 `f`、sidebar 点击标题时，前端乐观更新后向 daemon 发送 `favorite` / `unfavorite` action，daemon 执行后重新推送 `ViewMsg` 调和；删除 session 时 daemon 自动剪枝收藏。TUI 与 sidebar 的收藏状态经 daemon 保持一致。收藏不写 opencode 的数据库——持久化走 daemon 自己的 `~/.local/share/octl/state.json`（变更即写 + 周期快照 + 退出 flush，重启恢复），孤儿收藏由既有剪枝机制清理。
 
 ### Stats（用量统计，按 3）
 

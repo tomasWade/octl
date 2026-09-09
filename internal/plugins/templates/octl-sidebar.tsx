@@ -12,7 +12,7 @@ import { createSignal, createMemo, onCleanup, Show } from "solid-js";
 const execAsync = promisify(exec);
 
 const LOG_FILE = "/tmp/octl-sidebar.log";
-const SOCKET_PATH = `${homedir()}/.local/share/opencode/octl.sock`;
+const SOCKET_PATH = `${homedir()}/.local/share/octl/octl.sock`;
 
 export function truncate(str: string, max: number): string {
   if (str.length <= max) return str;

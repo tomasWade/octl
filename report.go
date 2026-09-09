@@ -21,8 +21,8 @@ func runReport(args []string) int {
 	dateStr := fs.String("date", "", "single day, e.g. 2026-09-04 (local timezone)")
 	fromStr := fs.String("from", "", "window start, e.g. 2026-09-01 or 2026-09-01T14:00")
 	toStr := fs.String("to", "", "window end (exclusive), defaults to now")
-	dir := fs.String("dir", "", "output directory override (daemon-side; default ~/.local/share/opencode/daily)")
-	socketPath := fs.String("socket", "", "daemon Unix socket path (default ~/.local/share/opencode/octl.sock)")
+	dir := fs.String("dir", "", "output directory override (daemon-side; default ~/.local/share/octl/daily)")
+	socketPath := fs.String("socket", "", "daemon Unix socket path (default ~/.local/share/octl/octl.sock)")
 	timeoutSec := fs.Int("timeout", 30, "response timeout in seconds")
 	fs.Usage = func() { printReportUsage(fs.Output()) }
 
@@ -107,9 +107,9 @@ func printReportUsage(w io.Writer) {
   时间格式：2026-09-04 / 2026-09-04T14:00 / 2026-09-04 14:00
 
 Flags:
-  --dir <path>      输出目录（daemon 侧展开 ~；默认 ~/.local/share/opencode/daily）
+  --dir <path>      输出目录（daemon 侧展开 ~；默认 ~/.local/share/octl/daily）
   --json            输出完整 JSON（stdout 纯 JSON）
-  --socket <path>   daemon socket 路径（默认 ~/.local/share/opencode/octl.sock）
+  --socket <path>   daemon socket 路径（默认 ~/.local/share/octl/octl.sock）
   --timeout <sec>   响应超时秒数（默认 30，含骨架拉取）
 
 daemon 也会自动落盘：启动时 + 每 10 分钟检查（当日底片超 4h 未刷新即

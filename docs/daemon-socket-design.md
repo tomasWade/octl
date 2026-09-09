@@ -27,7 +27,7 @@ Unix domain socket 与 TCP socket 在通信语义上完全一致：
 │                                                             │
 │  ┌──────────────────────────────────────────────────────┐   │
 │  │              Unix socket listener                     │   │
-│  │     ~/.local/share/opencode/octl.sock                │   │
+│  │     ~/.local/share/octl/octl.sock                │   │
 │  └─────────────────────────┬────────────────────────────┘   │
 │                            │                                │
 │                            ▼                                │
@@ -146,7 +146,7 @@ octl --daemon
 ```
 
 - 前台运行。
-- 监听 Unix socket：`~/.local/share/opencode/octl.sock`。
+- 监听 Unix socket：`~/.local/share/octl/octl.sock`。
 - 启动流程：
   1. 打开 DB（只读）。
   2. 初始 `syncFromDB()`。
@@ -172,7 +172,7 @@ octl --tui
 |------|--------|------|
 | `--daemon` | false | 启动 daemon 服务 |
 | `--tui` | false | 显式启动 TUI |
-| `--socket` | `~/.local/share/opencode/octl.sock` | Unix socket 路径 |
+| `--socket` | `~/.local/share/octl/octl.sock` | Unix socket 路径 |
 | `--refresh-time` | `5` | Manage 视图自动刷新间隔 |
 
 ---
@@ -449,6 +449,6 @@ func (m Model) connectDaemon() tea.Cmd {
 
 ## 12. 最终确认
 
-- socket 路径仍用 `~/.local/share/opencode/octl.sock`，是否接受？
+- socket 路径用 `~/.local/share/octl/octl.sock`（原定于 opencode 数据目录，后随自有数据目录收编迁出），是否接受？
 - TUI 断线重连间隔 5 秒是否可接受？
 - online/offline 用 `🟢 ONLINE` / `🔴 OFFLINE` 文案和颜色是否可接受？

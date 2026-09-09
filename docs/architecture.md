@@ -245,7 +245,7 @@ daemon 是独立进程（`octl --daemon`），核心组件通过 `select` 串行
 
 TUI 和 sidebar 通过 `SocketClient` 以 Unix socket 连接 daemon：
 
-1. `Connect()` 连接 `~/.local/share/opencode/octl.sock`
+1. `Connect()` 连接 `~/.local/share/octl/octl.sock`
 2. `SubscribeView()` 发送 `{"type":"subscribe","channels":["view"]}`
 3. 后台 goroutine 读取 JSON Lines，解析为 `ViewMsg` / `ProgressMsg` / `ResultMsg` / `ResponseMsg` / `SubscribedMsg` / `PongMsg`
 4. 连接断开时 `Msgs()` channel 关闭，TUI 进入 `🔴 OFFLINE` 状态并定时重连

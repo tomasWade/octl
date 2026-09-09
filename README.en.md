@@ -142,7 +142,7 @@ On startup the TUI connects to the daemon's Unix socket. If the daemon isn't run
 | `--daemon` | `false` | Run the daemon service in the foreground |
 | `--tui` | `false` | Run the TUI explicitly (default) |
 | `--version` | `false` | Print version + protocol MD5 and exit |
-| `--socket` | `~/.local/share/opencode/octl.sock` | Unix socket path |
+| `--socket` | `~/.local/share/octl/octl.sock` | Unix socket path |
 | `--refresh-time` | `5` | Deprecated; refresh is daemon-push driven, the TUI no longer polls |
 
 Subcommands: `plugins` (generate opencode plugins), `query` (one-shot queries), and four action subcommands `delete` / `create` / `fork` / `send` (see the next two sections).
@@ -227,7 +227,7 @@ Behavior notes:
 
 ## Daily Raw Digest (`octl report`)
 
-`octl report` asks the daemon to render the "raw digest" (mechanical fact layer) to `~/.local/share/opencode/daily/`, for daily-report skills / agents to narrate further, or for plain human archaeology (a complete consumer example: [examples/skills](examples/skills/六耳/SKILL.md)):
+`octl report` asks the daemon to render the "raw digest" (mechanical fact layer) to `~/.local/share/octl/daily/`, for daily-report skills / agents to narrate further, or for plain human archaeology (a complete consumer example: [examples/skills](examples/skills/六耳/SKILL.md)):
 
 ```bash
 octl report                          # today (overwrite)
@@ -247,7 +247,7 @@ octl ships a standalone daemon that receives live status events from opencode se
 **The daemon must be started separately**: `octl --daemon`. It listens on:
 
 ```
-~/.local/share/opencode/octl.sock
+~/.local/share/octl/octl.sock
 ```
 
 The daemon:
@@ -255,7 +255,7 @@ The daemon:
 2. Re-syncs the database every 30 seconds, correcting stale or lost event states
 3. Receives 11 event types over the Unix socket (session.status, session.idle, session.created, session.deleted, session.error, permission.asked, permission.replied, question.asked, question.replied, question.rejected, session.compacted)
 4. Pushes the full `ViewMsg` (projects / sessions / stats / favorites) to subscribed TUI and sidebar clients
-5. Receives and executes management actions from the TUI (delete / export / create / fork / send / favorite / unfavorite); favorites are maintained by the daemon and persisted to `~/.local/share/opencode/octl-state.json` (restored on restart)
+5. Receives and executes management actions from the TUI (delete / export / create / fork / send / favorite / unfavorite); favorites are maintained by the daemon and persisted to `~/.local/share/octl/state.json` (restored on restart)
 
 ### Keeping the daemon running (systemd user service)
 
@@ -422,7 +422,7 @@ Lists favorited sessions in `ViewMsg` order. Supports cursor navigation, multi-s
 - Empty favorites show `No favorites yet — press f in Manage to favorite a session`.
 - Line format: `status icon + title`; the cursor line gets a `▶` prefix; multi-selected lines get `✓` and purple highlight.
 
-> Favorites are **daemon-owned**: the authoritative source is the daemon-pushed `ViewMsg.Favorites` plus each session's `isFavorite` field. Pressing `f` in the TUI or clicking a title in the sidebar does an optimistic local update, sends a `favorite` / `unfavorite` action, and the daemon reconciles by pushing a fresh `ViewMsg`; deleting a session prunes favorites automatically. TUI and sidebar stay consistent through the daemon. Favorites never touch opencode's database — persistence goes to the daemon's own `~/.local/share/opencode/octl-state.json` (write-on-change + periodic snapshots + flush on exit, restored on restart), with orphaned favorites cleaned up by existing pruning.
+> Favorites are **daemon-owned**: the authoritative source is the daemon-pushed `ViewMsg.Favorites` plus each session's `isFavorite` field. Pressing `f` in the TUI or clicking a title in the sidebar does an optimistic local update, sends a `favorite` / `unfavorite` action, and the daemon reconciles by pushing a fresh `ViewMsg`; deleting a session prunes favorites automatically. TUI and sidebar stay consistent through the daemon. Favorites never touch opencode's database — persistence goes to the daemon's own `~/.local/share/octl/state.json` (write-on-change + periodic snapshots + flush on exit, restored on restart), with orphaned favorites cleaned up by existing pruning.
 
 ### Stats (key 3)
 

@@ -15,7 +15,7 @@
 │  └────────┬───────────┘            └────────┬───────────┘                    │
 │           │                                 │                               │
 │           │   Unix socket                                                   │
-│           ▼  (~/.local/share/opencode/octl.sock)                            │
+│           ▼  (~/.local/share/octl/octl.sock)                            │
 │  ┌──────────────────────────────────────────────────────────────────────┐   │
 │  │                    octl daemon (独立进程)                             │   │
 │  │  ┌─────────────────────┐  ┌──────────────────────┐  ┌──────────────┐  │   │
@@ -72,7 +72,7 @@
 ### 2. octl daemon
 
 - 独立进程：`octl --daemon`，前台运行
-- 监听单一 Unix socket：`~/.local/share/opencode/octl.sock`
+- 监听单一 Unix socket：`~/.local/share/octl/octl.sock`
 - 新连接第一行决定角色：
   - `{"type":"subscribe"}` → subscriber，加入 `clients[]`，接收 snapshot 广播
   - 其他 → event source，写入 `eventCh(buf=100)`
@@ -100,7 +100,7 @@
   └─ 3. 启动 30s 定时器
 
 终端 2: octl
-  ├─ 1. 连接 ~/.local/share/opencode/octl.sock
+  ├─ 1. 连接 ~/.local/share/octl/octl.sock
   ├─ 2. 发送 subscribe
   ├─ 3. 接收初始 snapshot
   └─ 4. 启动 Bubble Tea UI

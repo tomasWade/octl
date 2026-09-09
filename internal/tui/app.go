@@ -15,7 +15,11 @@ import (
 	"github.com/tomasWade/octl/internal/tui/views"
 )
 
-func init() {
+// initTUILog 把 log 输出重定向到 TUI 专属日志文件。必须在 TUI 启动路径
+// （New）里调用而非 init()：octl 单二进制多模式，daemon 进程同样 import
+// 本包，init() 里的全局 SetOutput 会把 daemon 的所有 log.Printf 吞进
+// TUI 日志文件，journalctl 下 daemon 日志全部丢失。
+func initTUILog() {
 	f, err := os.OpenFile("/tmp/octl-tui.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err == nil {
 		log.SetOutput(f)
@@ -68,6 +72,7 @@ type Model struct {
 
 // New 使用给定的刷新间隔和 daemon socket 路径创建一个新的 Model。
 func New(refreshTime int, socketPath string) Model {
+	initTUILog()
 	return Model{
 		activeView:   DashboardView,
 		nav:          NewNavModel(),

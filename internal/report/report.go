@@ -14,25 +14,21 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tomasWade/octl/internal/paths"
 	"github.com/tomasWade/octl/internal/types"
 )
 
-// DefaultDir 是底片与讣告的默认存放目录。
-const DefaultDir = "~/.local/share/opencode/daily"
-
-// ExpandDir 展开 DefaultDir 中的 ~ 前缀为用户主目录。
+// ExpandDir 解析底片输出目录：空值取 octl 自有默认目录
+// ~/.local/share/octl/daily；~ 前缀展开为用户主目录。
 func ExpandDir(dir string) (string, error) {
 	if dir == "" {
-		dir = DefaultDir
-	}
-	if dir == "~" || strings.HasPrefix(dir, "~/") {
-		home, err := os.UserHomeDir()
+		d, err := paths.DailyDir()
 		if err != nil {
-			return "", fmt.Errorf("resolve home: %w", err)
+			return "", fmt.Errorf("resolve daily dir: %w", err)
 		}
-		dir = filepath.Join(home, strings.TrimPrefix(dir, "~"))
+		dir = d
 	}
-	return dir, nil
+	return paths.ExpandHome(dir)
 }
 
 // DailyStats 是 raw 头部的统计行数据（机器可读注释 + 人读列表）。

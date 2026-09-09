@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/tomasWade/octl/internal/paths"
+
 	_ "embed"
 )
 
@@ -55,7 +57,12 @@ func ProtocolMD5() string {
 }
 
 // Generate 将内嵌模板写入 outputDir，并把模板中的版本占位符替换为 ProtocolMD5()。
+// outputDir 支持 ~ 前缀（shell 不会展开参数中的 ~，这里统一收口）。
 func Generate(outputDir string) error {
+	outputDir, err := paths.ExpandHome(outputDir)
+	if err != nil {
+		return fmt.Errorf("generate plugin: resolve output dir: %w", err)
+	}
 	if err := os.MkdirAll(outputDir, 0755); err != nil {
 		return fmt.Errorf("generate plugin: %w", err)
 	}
