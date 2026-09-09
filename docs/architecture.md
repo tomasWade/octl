@@ -70,7 +70,7 @@ Project 节点和 Session 节点支持不同的按键操作。
               │ 11 类目标事件
               ▼
        internal/plugins/templates/octl-hook.js
-       （运行时由 `octl plugins --output=<dir>` 生成到目标目录）
+       （运行时由 `octl install` 生成到 `~/.config/opencode/plugins/`）
               │
               │ 裸事件 JSON
               ▼
@@ -302,7 +302,7 @@ TUI 第一列展示 `Glyph()` 纯图标（无文字标签）；已收藏的 sess
 
 ### Plugin: octl-hook.js
 
-模板位置：`internal/plugins/templates/octl-hook.js`，运行时通过 `octl plugins --output=<dir>` 生成。
+模板位置：`internal/plugins/templates/octl-hook.js`，运行时由 `octl install` 生成（daemon 启动时自动对齐）。
 
 Bun 插件，每个 opencode 实例启动时加载。负责过滤 11 类目标事件并通过 Unix socket 推送给 octl daemon。
 
@@ -316,7 +316,7 @@ Bun 插件，每个 opencode 实例启动时加载。负责过滤 11 类目标�
 
 ### Plugin: octl-sidebar.tsx
 
-模板位置：`internal/plugins/templates/octl-sidebar.tsx`，运行时通过 `octl plugins --output=<dir>` 生成。
+模板位置：`internal/plugins/templates/octl-sidebar.tsx`，运行时由 `octl install` 生成（daemon 启动时自动对齐）。
 
 SolidJS/TSX 插件，在 OpenCode TUI 中注册 `sidebar_content` slot。它：
 

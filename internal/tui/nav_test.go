@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/tomasWade/octl/internal/daemon"
 	"github.com/tomasWade/octl/internal/tui/views"
@@ -889,6 +890,29 @@ func TestApp_FavoritesToggleRequestMsg_LargeBatch(t *testing.T) {
 	for _, id := range ids {
 		if !model.favoritesMap[id] {
 			t.Errorf("favoritesMap missing %s", id)
+		}
+	}
+}
+
+// TestReconnectDelayCurve 验证重连退避曲线：快首试 250ms → 指数退避 → 5s 封顶，
+// 负数防御性钳制。
+func TestReconnectDelayCurve(t *testing.T) {
+	cases := []struct {
+		attempts int
+		want     time.Duration
+	}{
+		{0, 250 * time.Millisecond},
+		{1, 500 * time.Millisecond},
+		{2, time.Second},
+		{3, 2 * time.Second},
+		{4, 5 * time.Second},
+		{5, 5 * time.Second},
+		{100, 5 * time.Second},
+		{-1, 250 * time.Millisecond},
+	}
+	for _, c := range cases {
+		if got := reconnectDelay(c.attempts); got != c.want {
+			t.Errorf("reconnectDelay(%d) = %v, want %v", c.attempts, got, c.want)
 		}
 	}
 }

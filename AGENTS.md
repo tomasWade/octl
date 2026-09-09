@@ -33,6 +33,7 @@ main.go
   ├── query.go               "octl query" 子命令：一次性查询 daemon（snaps/sessions/messages/daily）
   ├── action.go              "octl delete/create/fork/send/purge" 动作子命令：一次性 action + 等 result
   ├── report.go               "octl report" 子命令：请求 daemon 生成底片并落盘（日报事实层）
+  └── main.go 内 runInstall   "octl install" / "octl plugins install" 子命令：生成插件 + 注册 tui.json
   ├── internal/tui/          Bubble Tea 应用外壳
   │     ├── app.go           顶层模型：视图切换、daemon 连接、消息路由、favoritesMap 共享收藏集合
   │     ├── nav.go           左侧导航栏（Manage / Favorites / Stats）
@@ -63,9 +64,11 @@ main.go
   │     ├── octl.service      systemd 用户服务示例（daemon 常驻）
   │     └── hooks/pre-push    github remote 只放行 main/tags
   ├── private/               （不追踪）octl-local 私有运维仓 clone，见「分支模型与发布」
-  ├── internal/plugins/      插件模板与生成逻辑
-  │     ├── gen.go           go:embed + MD5 + Generate
+  ├── internal/plugins/      插件模板与生成/安装逻辑
+  │     ├── gen.go           go:embed + MD5 + Generate（md5 比对差异才写 + 原子写）
   │     ├── gen_test.go      生成逻辑测试
+  │     ├── install.go       Install：Generate + tui.json 注册（mergePluginEntry 纯函数，只追加不替换）
+  │     ├── install_test.go  注册逻辑表驱动测试
   │     └── templates/
   │           ├── octl-hook.js      事件转发插件模板
   │           └── octl-sidebar.tsx  sidebar 插件模板
@@ -126,7 +129,7 @@ go build -o octl .
 | `--socket` | `~/.local/share/octl/octl.sock` | Unix socket 路径 |
 | `--refresh-time` | `5` | 已废弃；TUI 刷新由 daemon 推送驱动 |
 
-另有 `plugins` 子命令：`octl plugins --output=<dir>` 生成配套插件（见下方「启用 opencode 插件」）。
+另有 `install` 子命令：`octl install [--output=<dir>]` 一条命令生成配套插件（`octl-hook.js` + `octl-sidebar.tsx`，缺省输出 `~/.config/opencode/plugins/`）并把 sidebar 注册进 `~/.config/opencode/tui.json`（只追加不替换）；`octl plugins install` 为同义形态，旧 `octl plugins --output` 用法打新用法并以退出码 2 退出（见下方「启用 opencode 插件」）。
 
 ### `query` 子命令（一次性查询，不开 TUI）
 
@@ -181,21 +184,25 @@ go build -o octl .
 
 - **octl 自有数据统一住在 `~/.local/share/octl/`**（`internal/paths` 是唯一路径出处）：`octl.sock`（socket）、`state.json`（收藏 + 卡住态）、`daily/`（日报底片 + 叙事层）、`shadow.db`（影子库）。不与 opencode 的数据目录混居；旧版落在 opencode 目录下的 state/daily 属一次性存量，已随目录切换手工迁走，代码中不驻留迁移逻辑。
 - TUI 启动时会连接 `~/.local/share/octl/octl.sock` 上的 daemon。
-- 若 daemon 未运行，TUI **不会退出**，右上角显示 `🔴 OFFLINE`，每 5 秒自动重连；恢复后显示 `🟢 ONLINE`。
+- 若 daemon 未运行，TUI **不会退出**，右上角显示 `🔴 OFFLINE`，按指数退避自动重连（250ms 首试，逐级退至 5s 封顶，连上即清零）；恢复后显示 `🟢 ONLINE`。
 - TUI 不再直接读取数据库，所有展示数据来自 daemon 推送的 `ViewMsg`。
 - 数据库路径硬编码为 `~/.local/share/opencode/opencode.db`（见 `main.go` 和 `cmd/dbtest/main.go`）。
 
 ### 启用 opencode 插件
 
-使用 `octl plugins` 命令生成插件到 opencode 的 plugins 目录：
+使用 `octl install` 一条命令完成插件生成与注册：
 
 ```bash
-octl plugins --output=~/.config/opencode/plugins/
+octl install
 ```
 
-该命令会输出 `octl-hook.js` 和 `octl-sidebar.tsx` 两个文件，并注入与当前 `octl` 二进制匹配的协议版本常量。每个 opencode 实例启动时会自动加载 `octl-hook.js`，过滤 11 类目标事件并转发到 daemon（事件 properties 附带 `pid` / `tmuxPane` / `tmuxSession` 附着信息，供 daemon 维护 session→pid→tmux pane 映射并在连接断开时清理）；插件自带 500 条 FIFO 缓冲和断线 2 秒重连。
+该命令生成 `octl-hook.js` 和 `octl-sidebar.tsx` 两个文件到 `~/.config/opencode/plugins/`（`--output=<dir>` 可指定其他目录），注入与当前 `octl` 二进制匹配的协议版本常量，并把 sidebar 以 `file://` 绝对路径条目追加进 `~/.config/opencode/tui.json` 的 `plugin` 数组（只追加不替换：已含精确条目一字节不动、异路径条目不碰、JSON 损坏报错不覆盖）。
 
-sidebar 插件通过 `~/.config/opencode/tui.json` 注册，指向 `~/.config/opencode/plugins/octl-sidebar.tsx` 的绝对路径。新版 sidebar 订阅 daemon 的 `view` 频道，直接渲染 `ViewMsg`（`normalizeProject` 对每个 session 透传 `parentId`/`hasChildren`/`depth`/`isFavorite`）。面板顶部为「全部」/「收藏」tab 切换栏：`activeTab` signal 默认 `"all"`，手写 text + `onMouseDown` 实现（不用 @opentui 的 `tab_select` 组件——其无鼠标交互），选中 tab 经 `tabTitleFg` 高亮 `#c0caf5`、未选中 `#565f89`，左键点击经 `switchTab` 纯函数切换（无效 tab 保持原值）；project/session 树在「全部」tab 渲染，收藏列表在「收藏」tab 渲染。tab 栏下方另有状态 chip 过滤栏（`StatusFilterBar`），**全局作用于两个 tab**（勾选状态跨 tab 保持）：单行动态渲染、只显示计数非零的状态 chip（`visibleChips`，3 字母缩写 ERR/ASK/RTY/BSY/IDL/UNK/ARC，PERMISSION 显示 ASK），chip = 状态色圆点 + 标签 + 实时计数，左键点击切换勾选（可多选组合），默认全不勾 = 不过滤，有勾选时**行首**出现 `✕` 一键清除（前置保证多 chip 撑满宽度时重置仍可达；sidebar 宽约 33 列，全量 7 chip 一行放不下，零计数状态过滤结果必空、无点击价值故隐藏）。「全部」树过滤为剪枝保形：命中自身 status 的 session 及其整条祖先链保留（`filterSessionsKeepingAncestors`，visited 防环/悬空 parentId 安全），层级/缩进/折叠状态不丢；过滤后无可见 session 的 project 整组隐藏，全空时提示 `(no matching sessions)`。「收藏」列表同语义过滤（`favoriteMatchesFilter`：叶子看自身 status、父条目额外看 rowStatus 聚合，与树视图祖先保留观感一致），全滤空时提示 `(no matching favorites)`；chip 计数由 `countStatuses` 统计（只看自身 status，不看 rowStatus 聚合）。并支持 project 级与 session 级两级鼠标折叠/展开（▶/▼ 图标，左键触发，非左键不响应）：project 标题显示下属 session 计数 (N)；有子节点的 session 默认折叠仅显示 root 行，折叠行标题显示直接 subsession 计数（格式 "标题 (N)"），展开后 subsession 按 depth 缩进渲染并显示自身状态。扁平 sessions 由 `buildSessionTree` 按 parentId 重建为多级树（悬空 parentId/自引用/depth≤0 按 root 处理）；父节点状态标记使用 daemon 推送的 `rowStatus` 聚合值（含全部后代最高优先级状态），折叠与展开均可见。折叠状态以 projectId / sessionId 为 key 在组件层保持，`ViewMsg` 刷新后不丢失。
+daemon 启动时还会自动把内嵌模板渲染结果与 `~/.config/opencode/plugins/` 的两个文件做 md5 比对、有差异才写（升级流程收敛为「替换二进制 + 重启 daemon」：新启动的 opencode 直接用新插件，运行中的实例约 1 分钟内热重载自动重连；daemon 收到版本不符的 subscribe 时同样触发该对齐兜底）。
+
+每个 opencode 实例启动时会自动加载 `octl-hook.js`，过滤 11 类目标事件并转发到 daemon（事件 properties 附带 `pid` / `tmuxPane` / `tmuxSession` 附着信息，供 daemon 维护 session→pid→tmux pane 映射并在连接断开时清理）；插件自带 500 条 FIFO 缓冲和断线 2 秒重连。
+
+sidebar 插件由 `octl install` 自动以 `file://` 绝对路径条目注册进 `~/.config/opencode/tui.json`（指向 `~/.config/opencode/plugins/octl-sidebar.tsx`）。新版 sidebar 订阅 daemon 的 `view` 频道，直接渲染 `ViewMsg`（`normalizeProject` 对每个 session 透传 `parentId`/`hasChildren`/`depth`/`isFavorite`）。面板顶部为「全部」/「收藏」tab 切换栏：`activeTab` signal 默认 `"all"`，手写 text + `onMouseDown` 实现（不用 @opentui 的 `tab_select` 组件——其无鼠标交互），选中 tab 经 `tabTitleFg` 高亮 `#c0caf5`、未选中 `#565f89`，左键点击经 `switchTab` 纯函数切换（无效 tab 保持原值）；project/session 树在「全部」tab 渲染，收藏列表在「收藏」tab 渲染。tab 栏下方另有状态 chip 过滤栏（`StatusFilterBar`），**全局作用于两个 tab**（勾选状态跨 tab 保持）：单行动态渲染、只显示计数非零的状态 chip（`visibleChips`，3 字母缩写 ERR/ASK/RTY/BSY/IDL/UNK/ARC，PERMISSION 显示 ASK），chip = 状态色圆点 + 标签 + 实时计数，左键点击切换勾选（可多选组合），默认全不勾 = 不过滤，有勾选时**行首**出现 `✕` 一键清除（前置保证多 chip 撑满宽度时重置仍可达；sidebar 宽约 33 列，全量 7 chip 一行放不下，零计数状态过滤结果必空、无点击价值故隐藏）。「全部」树过滤为剪枝保形：命中自身 status 的 session 及其整条祖先链保留（`filterSessionsKeepingAncestors`，visited 防环/悬空 parentId 安全），层级/缩进/折叠状态不丢；过滤后无可见 session 的 project 整组隐藏，全空时提示 `(no matching sessions)`。「收藏」列表同语义过滤（`favoriteMatchesFilter`：叶子看自身 status、父条目额外看 rowStatus 聚合，与树视图祖先保留观感一致），全滤空时提示 `(no matching favorites)`；chip 计数由 `countStatuses` 统计（只看自身 status，不看 rowStatus 聚合）。并支持 project 级与 session 级两级鼠标折叠/展开（▶/▼ 图标，左键触发，非左键不响应）：project 标题显示下属 session 计数 (N)；有子节点的 session 默认折叠仅显示 root 行，折叠行标题显示直接 subsession 计数（格式 "标题 (N)"），展开后 subsession 按 depth 缩进渲染并显示自身状态。扁平 sessions 由 `buildSessionTree` 按 parentId 重建为多级树（悬空 parentId/自引用/depth≤0 按 root 处理）；父节点状态标记使用 daemon 推送的 `rowStatus` 聚合值（含全部后代最高优先级状态），折叠与展开均可见。折叠状态以 projectId / sessionId 为 key 在组件层保持，`ViewMsg` 刷新后不丢失。
 
 **收藏（daemon 权威驱动）**：session 行已拆分为独立 text 子元素——行首展开图标 text（▶/▼，仅绑展开折叠，左键触发）+ 标题 text（点击切换收藏），固定 1 空格 gap；project 行同样在项目名前用 `statusColors` 渲染 `rowStatus` 聚合状态点。标题 hover 高亮（`hoveredId` signal，`onMouseOver`/`onMouseOut` 驱动，变色 `#c0caf5`）。收藏的**权威数据源是 daemon 推送的 `ViewMsg.Favorites` 与每个 session 的 `isFavorite` 字段**：每次收到 `view` 消息时，sidebar 将 `Favorites` 列表同步到本地 `favorites` signal（旧 daemon 无该字段时优雅降级为空收藏）。点击标题触发 `toggleFavoriteAction`：向 daemon 发送 `favorite`/`unfavorite` action（经 `sendAction`），并乐观更新本地 signal，由下一次 `ViewMsg` 确认调和。已收藏标题带 `★` 前缀并以 `#e0af68` 高亮；收藏列表（`★ Favorites`）在「收藏」tab 内显示，空收藏时显示 `(no favorites)` 提示，条目从所有 project 的 sessions 中反查标题/状态（状态点复用 `rowStatus` 聚合渲染父项、自身 `status` 渲染叶子，与「全部」树视图一致），已删除 session 自动跳过，点击条目可取消收藏。
 
@@ -250,6 +257,12 @@ go test -run TestRealDBSchema
 - `internal/daemon`（report_test.go + testmain_test.go）：writeReport 落盘产物、`report` request 参数校验与 dir 覆盖；TestMain 全局注入底片目录防测试污染真实 `~/.local/share/octl/daily/`。
 - 根包（report_test.go）：printReportUsage 帮助回归、runReport 用法错误（均在连接 daemon 前校验）。
 - 根包（action_test.go）：fake daemon 端到端（snapshot 候选应答 + action 记录 + result 回放）——delete 模糊匹配/批量去重/零命中/歧义不发 action、create 的 message 与 --dir 默认 cwd/显式覆盖、fork/send 的 SessionID/Message/Directory 留空、result 失败与 result.Error 的退出码、用法错误表驱动、`renderActionResult` 渲染与退出码、`confirmAction` 输入解析、`resolveActionTargets` 去重与整体失败。
+- `internal/plugins`（gen_test.go / install_test.go）：Generate 写两文件/占位符替换/MD5 稳定/`~` 展开/内容一致不重写（mtime 不变）/覆盖陈旧内容/无 tmp 残留；Install 表驱动六用例（tui.json 不存在写模板/已含精确条目一字节不动/追加保留原字段与既有条目/异路径条目照样追加且原样保留/损坏返回错误文件不变/自定义目录 `file://` 指向与 `~` 展开）。
+- 根包（main_test.go）：主帮助覆盖 install 用法与 plugins 作废说明；`runPluginsCmd` 旧用法（`--output`/空参/bogus）退出码 2、`plugins install` 形态路由到 runInstall；`runInstall` 对损坏 tui.json 返回退出码 1 且不改文件。
+- `internal/daemon`（align_test.go）：`alignPlugins` 覆盖陈旧内容、内容一致跳过重写；mismatch subscribe 集成（拒绝 + 同步触发插件修复写盘）。TestMain 同时注入插件对齐目录（与 state 路径同理，防测试写真实 `~/.config/opencode/plugins/`）。
+- `internal/db`（last_message_batch_test.go）：`GetAllLastMessages` 批量结果与逐条 `GetLastMessageRoleCompleted` 完全一致（角色/completed/无消息缺席）。
+- `internal/daemon`（state_test.go 之 v2）：进程映射持久化保留窗口（5 分钟内落盘/过期不落）、恢复验活（本测试进程灌回 sessionProcess+pidIndex/无效 PID 跳过）、v1 文件正常加载。
+- `internal/tui`（nav_test.go 之 TestReconnectDelayCurve）：重连退避曲线（250ms/500ms/1s/2s/5s 封顶/负数钳制）。
 - `internal/tui`（nav_test.go）：ViewType 枚举与 NavItems 三视图顺序、数字键 1/2/3 切换、Tab/Shift+Tab 循环、app 层 `FavoritesToggleRequestMsg`/`FavoritesRemoveRequestMsg` 的 toggle 语义（对已收藏发 `unfavorite`、未收藏发 `favorite` action + 乐观更新）、`daemonViewMsg` 以 `ViewMsg.Favorites` 重建 `favoritesMap`（daemon 权威源，陈旧本地项丢弃）并广播 `FavoritesChangedMsg`。
 - `internal/tui/views`（favorites_test.go）：`rebuildFavoriteIDs` 排序（按 ViewMsg 出现顺序 + 补全未出现 ID）、光标 clamp、Space 多选、f 取消收藏（多选/单条，发 `FavoritesRemoveRequestMsg`）、d 删除（delete action + 收藏移除的 `tea.Sequence`）、滚动窗口、空态提示、状态色映射。
 - `plugin`：事件过滤、buffer FIFO、sidebar helper 函数（含 project/session 折叠、`buildSessionTree` 树重建、`normalizeProject` 字段透传（含 pid/tmux）、`tabTitleFg`/`switchTab` tab 高亮与切换、状态 chip 过滤纯函数（`STATUS_CHIPS` 定义/`visibleChips` 非零筛选/`filterActive`/`sessionMatchesFilter`/`favoriteMatchesFilter` 收藏条目过滤（叶子自身 status、父条目 rowStatus 聚合）/`toggleStatusFilter`/`filterSessionsKeepingAncestors` 剪枝保形含祖先链保留/环/悬空 parentId/顺序保持/`countStatuses` 只计自身 status）、`favoritesEmptyHint` 收藏空态提示、`toggleFavoriteImpl` 收藏切换不可变性、`sessionRowColor` 状态点着色、删除相关纯函数 `isGlobalProject`/`buildActionPayload`/`collectDescendantIDs`/`collectProjectSessionIDs`/`confirmDeleteAction`/`removeIdsFromMap`、tmux 跳转 `makeTmuxSessionName`/`focusSession`（注入 runner 验证命令序列）、hook 事件 payload 携带 pid/tmux 字段、`ViewMsg.Favorites` 同步本地 signal 与 isFavorite 兜底）、ViewMsg 解析。
@@ -319,6 +332,7 @@ COALESCE(s.time_compacting, 0) as time_compacting,
 - `octl --daemon` 启动独立前台进程。
 - 监听 Unix socket：`~/.local/share/octl/octl.sock`。
 - TUI 和 sidebar 通过 `internal/daemon.SocketClient` 连接并订阅 `view` 频道。
+- 启动序列（`StateManager.Run`）：探活拒绝双实例 → 清 stale socket → `alignPlugins()`（插件文件 md5 对齐，见「启用 opencode 插件」）→ **`net.Listen` 先于初次 DB 同步**（客户端整个重启窗口内可立即连上并收到 `subscribed`，同步期间到达的订阅先拿空视图）→ 初次 `syncFromDB` + `restoreState`（失败非致命，30s ticker 重试并补跑 restore）→ 广播首帧 snapshot/view → 进入事件循环。
 
 ### 连接角色
 
@@ -326,8 +340,8 @@ COALESCE(s.time_compacting, 0) as time_compacting,
 
 | 角色 | 行为 | 示例 |
 |------|------|------|
-| 事件源（event source） | 连接后直接发送裸事件 JSON，不 subscribe | `octl-hook.js`（由 `octl plugins` 生成） |
-| 订阅者（subscriber） | 连接后发送 `{"type":"subscribe","channels":["view"]}`，接收 ViewMsg | `octl` TUI、`octl-sidebar.tsx`（由 `octl plugins` 生成） |
+| 事件源（event source） | 连接后直接发送裸事件 JSON，不 subscribe | `octl-hook.js`（由 `octl install` 生成） |
+| 订阅者（subscriber） | 连接后发送 `{"type":"subscribe","channels":["view"]}`，接收 ViewMsg | `octl` TUI、`octl-sidebar.tsx`（由 `octl install` 生成） |
 
 daemon 读取新连接的第一行 JSON 来区分角色。
 
@@ -373,6 +387,8 @@ action 执行完成后，daemon 会重新 `buildView()` 并 `pushView()`，所�
 2. 最后一条消息 role 为 `"assistant"`：`time.completed` 非零 → `IDLE`；缺失/为零 → `BUSY`（消息仍在生成中，如长 shell 命令执行）
 3. 否则 → `UNKNOWN`
 
+同步路径的末条消息由 `db.GetAllLastMessages()` 一条 SQL 批量预取（消逐 session 查询的 N+1；查询失败降级为 UNKNOWN，等价于逐条失败）；纯派生函数 `deriveStatusFromLastMessage` 不查库。显示路径 `statusForSession` 仍走单条查询 `GetLastMessageRoleCompleted`。
+
 ### Wire Protocol（JSON Lines）
 
 - 插件 → daemon：裸事件，如 `{"type":"session.status","properties":{"sessionID":"...","status":{"type":"busy"},"pid":123,"tmuxPane":"%5","tmuxSession":"$0"}}`（hook 对全部 11 类事件附带 pid/tmux 附着信息；daemon 按 pid 维护 `sessionProcess`/`pidIndex` 映射，event-source 断连时按 pid 清理）
@@ -417,7 +433,7 @@ action 执行完成后，daemon 会重新 `buildView()` 并 `pushView()`，所�
 | `f` | 取消收藏：多选时移除全部选中 session，否则移除光标处 session（发 `FavoritesRemoveRequestMsg`，app 层发 `unfavorite` action 并经 daemon 确认） |
 | `d` | 删除：先发 `delete` action，再发 `FavoritesRemoveRequestMsg`（`tea.Sequence`），确保收藏列表同步清理（daemon 在删除成功时也会自动剪枝收藏） |
 
-收藏数据流（daemon 权威驱动）：daemon 的 `StateManager` 在内存中维护有序收藏集合（`favorites []string` + `favoritesSet map[string]bool`）。dashboard/favorites 视图通过 `FavoritesToggleRequestMsg` / `FavoritesRemoveRequestMsg` 请求 app 层：app 层先乐观更新共享的 `favoritesMap`（`map[string]bool`）并广播 `FavoritesChangedMsg` 给两个子视图，同时按 toggle 语义向 daemon 发送 `favorite`/`unfavorite` action；daemon 执行后重新 `buildView()` 推送，TUI 以 `ViewMsg.Favorites` 重建 `favoritesMap`（daemon 为权威源，陈旧本地项被丢弃），sidebar 以同一字段同步本地 `favorites` signal——两端收藏经 daemon 保持一致。收藏**持久化到 `~/.local/share/octl/state.json`**（`internal/daemon/state.go`）：变更即异步落盘 + 30s ticker 全量快照 + SIGTERM 退出 flush，daemon 重启后 `restoreState()` 恢复（孤儿收藏交给既有剪枝机制清理）。同一文件还持久化卡住态（PERMISSION/ERROR 的 session 含 permType/errorMsg）：恢复时 `source=event` 保持豁免接管语义，停机期间的解除事件由 hook 的 FIFO 缓冲补发自愈；pid/tmux 映射不恢复（新事件重建）。
+收藏数据流（daemon 权威驱动）：daemon 的 `StateManager` 在内存中维护有序收藏集合（`favorites []string` + `favoritesSet map[string]bool`）。dashboard/favorites 视图通过 `FavoritesToggleRequestMsg` / `FavoritesRemoveRequestMsg` 请求 app 层：app 层先乐观更新共享的 `favoritesMap`（`map[string]bool`）并广播 `FavoritesChangedMsg` 给两个子视图，同时按 toggle 语义向 daemon 发送 `favorite`/`unfavorite` action；daemon 执行后重新 `buildView()` 推送，TUI 以 `ViewMsg.Favorites` 重建 `favoritesMap`（daemon 为权威源，陈旧本地项被丢弃），sidebar 以同一字段同步本地 `favorites` signal——两端收藏经 daemon 保持一致。收藏**持久化到 `~/.local/share/octl/state.json`**（`internal/daemon/state.go`）：变更即异步落盘 + 30s ticker 全量快照 + SIGTERM 退出 flush，daemon 重启后 `restoreState()` 恢复（孤儿收藏交给既有剪枝机制清理）。同一文件还持久化卡住态（PERMISSION/ERROR 的 session 含 permType/errorMsg）：恢复时 `source=event` 保持豁免接管语义，停机期间的解除事件由 hook 的 FIFO 缓冲补发自愈；pid/tmux 进程映射自 schema v2 起也持久化（只存 `LastSeenAt` 5 分钟内的条目，恢复时 `kill(pid, 0)` 验活后灌回 `sessionProcess`/`pidIndex`，让 daemon 重启不中断 ↗ tmux 跳转；v1 文件正常加载）。
 
 ### 创建 / Fork / 发送消息
 
@@ -457,7 +473,7 @@ action 执行完成后，daemon 会重新 `buildView()` 并 `pushView()`，所�
 - **不要尝试通过 `db.DB` 直接写入**：写操作使用 `NewWritable()` 并在 `manage` 中完成。
 - **不要混淆 `time_*` 单位**：数据库中是 unix 毫秒，不是秒。
 - **TUI 现在依赖 daemon**：TUI 启动后必须连接 daemon 才能浏览数据；离线时显示 `🔴 OFFLINE`。
-- **hook 插件不 subscribe**：`octl-hook.js`（由 `octl plugins` 生成）只作为 event source 发送事件，不要改动它去 subscribe；sidebar 插件则需要 subscribe `view` 频道。
+- **hook 插件不 subscribe**：`octl-hook.js`（由 `octl install` 生成）只作为 event source 发送事件，不要改动它去 subscribe；sidebar 插件则需要 subscribe `view` 频道。
 - **管理操作由 daemon 执行**：TUI 只发送 action 请求，实际调用 `opencode` CLI 在 daemon 内部完成。
 - **CLI 动作子命令复用 action 协议**：`octl delete/create/fork/send` 与 TUI 走同一条 action 消息通道（`progress`/`result` 写回发起连接），daemon 侧没有专门的 CLI 路径；fork/send 的 `--dir` 缺省由 daemon 经 `resolveActionDirectory` 查 DB 补全，CLI 不要自己猜目录。
 - **收藏由 daemon 统一维护（内存态 + state.json 持久化）**：TUI 的 `favoritesMap` 和 sidebar 的 `favorites` signal 只是 daemon 推送 `ViewMsg.Favorites`/`isFavorite` 的渲染缓存 + 乐观更新层；增删收藏一律通过 `favorite`/`unfavorite` action 发送到 daemon，由 daemon 重新 `buildView()` 推送后调和。收藏不写 SQLite，持久化走 `~/.local/share/octl/state.json`（变更即写 + 周期快照 + 退出 flush，重启恢复）。不要把收藏直接写进 opencode 的数据库。
@@ -469,8 +485,8 @@ action 执行完成后，daemon 会重新 `buildView()` 并 `pushView()`，所�
 - CI 为 GitHub Actions（`.github/workflows/ci.yml`）：golangci-lint（固定 v2.13.2）、Go build+test 与 Bun 插件测试，push/PR 触发。
 - 发版流水线（`.github/workflows/release.yml`）：tag（`v*`）推送触发，交叉编译四平台二进制并自动创建 GitHub Release（附件 tar.gz + 自动生成 release notes）。
 - 构建产物为单个静态二进制文件 `octl`（CGO-free）。
-- daemon 设计为前台运行，由外部 supervisor/systemd 管理；systemd unit 示例未包含在仓库中。
-- sidebar 插件和 hook 插件由 `octl plugins --output=<dir>` 生成，需要随版本一起更新到 opencode 的 plugins 目录。
+- daemon 设计为前台运行，由外部 supervisor/systemd 管理；systemd 用户服务示例见 `scripts/octl.service`（README 的「让 daemon 常驻 / Keeping the daemon running」章节有其用法，`RestartSec=1`）。
+- sidebar 插件和 hook 插件由 `octl install` 生成并注册，daemon 启动时自动对齐插件文件——升级流程为「替换二进制 + 重启 daemon」，其余自动（运行中的 opencode 实例约 1 分钟内热重载）。
 
 ### 交付闭环（强制）
 

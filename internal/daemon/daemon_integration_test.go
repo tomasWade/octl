@@ -51,15 +51,40 @@ func writeEvent(t *testing.T, conn net.Conn, typ string, props map[string]interf
 	}
 }
 
-// readSnapshot reads one snapshot from the snapshot channel with a timeout.
-func readSnapshot(t *testing.T, ch <-chan []SessionState, timeout time.Duration) []SessionState {
+// waitState 循环读取 snapshot 直到目标 session 出现且满足 match 条件。
+// listen 前置到初次同步之前后，snapshot 通道的首帧可能是不含事件 session
+// 的同步视图，"读一帧即断言"的写法会被首帧抢先命中，必须循环等待。
+// （首帧还可能与事件帧同帧到达，跨 session 断言需用帧级谓词一次等齐。）
+func waitState(t *testing.T, ch <-chan []SessionState, id string, timeout time.Duration, match func(*SessionState) bool) *SessionState {
 	t.Helper()
-	select {
-	case snap := <-ch:
-		return snap
-	case <-time.After(timeout):
-		t.Fatalf("timed out waiting for snapshot (%v)", timeout)
-		return nil
+	deadline := time.After(timeout)
+	for {
+		select {
+		case snap := <-ch:
+			if st := findState(snap, id); st != nil && match(st) {
+				return st
+			}
+		case <-deadline:
+			t.Fatalf("timed out waiting for session %s to satisfy condition (%v)", id, timeout)
+			return nil
+		}
+	}
+}
+
+// waitStateGone 循环读取 snapshot 直到目标 session 从帧中消失。
+func waitStateGone(t *testing.T, ch <-chan []SessionState, id string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.After(timeout)
+	for {
+		select {
+		case snap := <-ch:
+			if findState(snap, id) == nil {
+				return
+			}
+		case <-deadline:
+			t.Fatalf("timed out waiting for session %s to disappear (%v)", id, timeout)
+			return
+		}
 	}
 }
 
@@ -127,11 +152,7 @@ func TestIntegration_SocketSessionStatusBusy(t *testing.T) {
 		"status":    map[string]interface{}{"type": "busy"},
 	})
 
-	snap := readSnapshot(t, sm.SnapshotCh(), time.Second)
-	state := findState(snap, "test1")
-	if state == nil {
-		t.Fatal("session test1 not found in snapshot")
-	}
+	state := waitState(t, sm.SnapshotCh(), "test1", time.Second, func(*SessionState) bool { return true })
 	if state.Status != StatusBusy {
 		t.Errorf("Status = %q, want %q", state.Status, StatusBusy)
 	}
@@ -159,11 +180,7 @@ func TestIntegration_SocketSessionIdle(t *testing.T) {
 		"sessionID": "idle-session",
 	})
 
-	snap := readSnapshot(t, sm.SnapshotCh(), time.Second)
-	state := findState(snap, "idle-session")
-	if state == nil {
-		t.Fatal("session idle-session not found in snapshot")
-	}
+	state := waitState(t, sm.SnapshotCh(), "idle-session", time.Second, func(*SessionState) bool { return true })
 	if state.Status != StatusIdle {
 		t.Errorf("Status = %q, want %q", state.Status, StatusIdle)
 	}
@@ -193,11 +210,7 @@ func TestIntegration_SocketPermissionUpdated(t *testing.T) {
 		"permTitle": "Run bash: npm test",
 	})
 
-	snap := readSnapshot(t, sm.SnapshotCh(), time.Second)
-	state := findState(snap, "perm-session")
-	if state == nil {
-		t.Fatal("session perm-session not found in snapshot")
-	}
+	state := waitState(t, sm.SnapshotCh(), "perm-session", time.Second, func(*SessionState) bool { return true })
 	if state.Status != StatusPermission {
 		t.Errorf("Status = %q, want %q", state.Status, StatusPermission)
 	}
@@ -232,11 +245,7 @@ func TestIntegration_SocketSessionError(t *testing.T) {
 		"error":     "connection timeout",
 	})
 
-	snap := readSnapshot(t, sm.SnapshotCh(), time.Second)
-	state := findState(snap, "err-session")
-	if state == nil {
-		t.Fatal("session err-session not found in snapshot")
-	}
+	state := waitState(t, sm.SnapshotCh(), "err-session", time.Second, func(*SessionState) bool { return true })
 	if state.Status != StatusError {
 		t.Errorf("Status = %q, want %q", state.Status, StatusError)
 	}
@@ -271,11 +280,7 @@ func TestIntegration_SocketSessionDeleted(t *testing.T) {
 		"projectID": "proj-d",
 	})
 
-	snap := readSnapshot(t, sm.SnapshotCh(), time.Second)
-	state := findState(snap, "del-session")
-	if state == nil {
-		t.Fatal("del-session should exist after session.created")
-	}
+	state := waitState(t, sm.SnapshotCh(), "del-session", time.Second, func(*SessionState) bool { return true })
 	if state.Title != "To Be Deleted" {
 		t.Errorf("Title = %q, want %q", state.Title, "To Be Deleted")
 	}
@@ -285,10 +290,7 @@ func TestIntegration_SocketSessionDeleted(t *testing.T) {
 		"sessionID": "del-session",
 	})
 
-	snap = readSnapshot(t, sm.SnapshotCh(), time.Second)
-	if state := findState(snap, "del-session"); state != nil {
-		t.Error("del-session should be removed from snapshot after session.deleted")
-	}
+	waitStateGone(t, sm.SnapshotCh(), "del-session", time.Second)
 }
 
 // TestIntegration_SocketMultipleEventsSameSession verifies that sending
@@ -312,14 +314,9 @@ func TestIntegration_SocketMultipleEventsSameSession(t *testing.T) {
 		"sessionID": "multi",
 	})
 
-	snap := readSnapshot(t, sm.SnapshotCh(), time.Second)
-	state := findState(snap, "multi")
-	if state == nil {
-		t.Fatal("session multi not found after idle event")
-	}
-	if state.Status != StatusIdle {
-		t.Errorf("after idle: Status = %q, want %q", state.Status, StatusIdle)
-	}
+	waitState(t, sm.SnapshotCh(), "multi", time.Second, func(s *SessionState) bool {
+		return s.Status == StatusIdle
+	})
 
 	// Then send busy — final state must be BUSY.
 	writeEvent(t, conn, "session.status", map[string]interface{}{
@@ -327,14 +324,9 @@ func TestIntegration_SocketMultipleEventsSameSession(t *testing.T) {
 		"status":    map[string]interface{}{"type": "busy"},
 	})
 
-	snap = readSnapshot(t, sm.SnapshotCh(), time.Second)
-	state = findState(snap, "multi")
-	if state == nil {
-		t.Fatal("session multi not found after busy event")
-	}
-	if state.Status != StatusBusy {
-		t.Errorf("after busy: Status = %q, want %q", state.Status, StatusBusy)
-	}
+	waitState(t, sm.SnapshotCh(), "multi", time.Second, func(s *SessionState) bool {
+		return s.Status == StatusBusy
+	})
 }
 
 // TestIntegration_SocketMultipleSessions verifies that events from
@@ -361,24 +353,23 @@ func TestIntegration_SocketMultipleSessions(t *testing.T) {
 		"sessionID": "session-b",
 	})
 
-	// The event loop processes events in order and pushes one snapshot
-	// after draining all pending events, so we only need to read once.
-	snap := readSnapshot(t, sm.SnapshotCh(), time.Second)
-
-	stateA := findState(snap, "session-a")
-	if stateA == nil {
-		t.Fatal("session-a not found in snapshot")
-	}
-	if stateA.Status != StatusBusy {
-		t.Errorf("session-a Status = %q, want %q", stateA.Status, StatusBusy)
-	}
-
-	stateB := findState(snap, "session-b")
-	if stateB == nil {
-		t.Fatal("session-b not found in snapshot")
-	}
-	if stateB.Status != StatusIdle {
-		t.Errorf("session-b Status = %q, want %q", stateB.Status, StatusIdle)
+	// Events may straddle multiple snapshots (first-frame broadcast can
+	// preempt the event frames), and both sessions can land in the SAME
+	// frame — so wait with a per-frame predicate instead of consuming
+	// frames one session at a time.
+	deadline := time.After(2 * time.Second)
+	for {
+		var stateA, stateB *SessionState
+		select {
+		case snap := <-sm.SnapshotCh():
+			stateA = findState(snap, "session-a")
+			stateB = findState(snap, "session-b")
+		case <-deadline:
+			t.Fatalf("timed out waiting for session-a(BUSY) and session-b(IDLE)")
+		}
+		if stateA != nil && stateA.Status == StatusBusy && stateB != nil && stateB.Status == StatusIdle {
+			return
+		}
 	}
 }
 
@@ -497,14 +488,9 @@ func TestIntegration_DBSyncOverwritesStaleEvents(t *testing.T) {
 		"status":    map[string]interface{}{"type": "busy"},
 	})
 
-	snap := readSnapshot(t, sm.SnapshotCh(), time.Second)
-	state := findState(snap, "db-test")
-	if state == nil {
-		t.Fatal("db-test not found after busy event")
-	}
-	if state.Status != StatusBusy {
-		t.Fatalf("expected BUSY after event, got %q", state.Status)
-	}
+	state := waitState(t, sm.SnapshotCh(), "db-test", time.Second, func(s *SessionState) bool {
+		return s.Status == StatusBusy
+	})
 	if state.Source != SourceEvent {
 		t.Errorf("expected Source=EVENT after event, got %q", state.Source)
 	}
@@ -519,14 +505,9 @@ func TestIntegration_DBSyncOverwritesStaleEvents(t *testing.T) {
 	// Wait for one more sync cycle to guarantee a fresh snapshot.
 	time.Sleep(100 * time.Millisecond)
 
-	snap = readSnapshot(t, sm.SnapshotCh(), 2*time.Second)
-	state = findState(snap, "db-test")
-	if state == nil {
-		t.Fatal("db-test should still exist after DB sync")
-	}
-	if state.Status != StatusIdle {
-		t.Errorf("expected IDLE after stale DB takeover, got %q", state.Status)
-	}
+	state = waitState(t, sm.SnapshotCh(), "db-test", 2*time.Second, func(s *SessionState) bool {
+		return s.Status == StatusIdle
+	})
 	if state.Source != SourceDB {
 		t.Errorf("expected Source=DB after stale takeover, got %q", state.Source)
 	}
@@ -571,11 +552,9 @@ func TestIntegration_ProcessInfoInSnapshot(t *testing.T) {
 		"tmuxSession": "$3",
 	})
 
-	snap := readSnapshot(t, sm.SnapshotCh(), time.Second)
-	state := findState(snap, "proc-session")
-	if state == nil {
-		t.Fatal("proc-session not found in snapshot")
-	}
+	state := waitState(t, sm.SnapshotCh(), "proc-session", time.Second, func(s *SessionState) bool {
+		return s.ProcessInfo != nil
+	})
 	if state.ProcessInfo == nil {
 		t.Fatal("expected ProcessInfo in snapshot")
 	}
@@ -613,8 +592,10 @@ func TestIntegration_ProcessInfoClearedOnDisconnect(t *testing.T) {
 		"tmuxSession": "$3",
 	})
 
-	snap := readSnapshot(t, sm.SnapshotCh(), time.Second)
-	if state := findState(snap, "proc-session"); state == nil || state.ProcessInfo == nil {
+	state := waitState(t, sm.SnapshotCh(), "proc-session", time.Second, func(s *SessionState) bool {
+		return s.ProcessInfo != nil
+	})
+	if state == nil || state.ProcessInfo == nil {
 		t.Fatal("expected ProcessInfo before disconnect")
 	}
 
@@ -633,14 +614,9 @@ func TestIntegration_ProcessInfoClearedOnDisconnect(t *testing.T) {
 		"sessionID": "other-session",
 	})
 
-	snap = readSnapshot(t, sm.SnapshotCh(), time.Second)
-	state := findState(snap, "proc-session")
-	if state == nil {
-		t.Fatal("proc-session should still exist after disconnect")
-	}
-	if state.ProcessInfo != nil {
-		t.Errorf("ProcessInfo should be cleared after disconnect, got %+v", state.ProcessInfo)
-	}
+	waitState(t, sm.SnapshotCh(), "proc-session", time.Second, func(s *SessionState) bool {
+		return s.ProcessInfo == nil
+	})
 }
 
 // TestIntegration_ViewIncludesProcessInfo verifies that a subscriber connected

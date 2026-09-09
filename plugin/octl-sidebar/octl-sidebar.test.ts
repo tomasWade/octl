@@ -63,13 +63,12 @@ describe("octl-sidebar helpers", () => {
     expect(friendlyError("ECONNREFUSED")).toBe("daemon not responding");
     expect(friendlyError("old binary please upgrade")).toBe("old binary please upgrade");
     expect(friendlyError("something else")).toBe("disconnected");
-    expect(friendlyError('octl version mismatch — run "octl plugins" to regenerate')).toBe(
-      'octl version mismatch — run "octl plugins" to regenerate'
-    );
+    const mismatchText = "octl version mismatch — daemon 已自动更新插件，opencode 约 1 分钟内热重载；未恢复请重启实例或运行 octl install";
+    expect(friendlyError(mismatchText)).toBe(mismatchText);
   });
 
   test("isVersionMismatchError detects protocol drift", () => {
-    expect(isVersionMismatchError('octl version mismatch — run "octl plugins" to regenerate')).toBe(true);
+    expect(isVersionMismatchError("octl version mismatch — daemon 已自动更新插件，opencode 约 1 分钟内热重载")).toBe(true);
     expect(isVersionMismatchError("old binary please upgrade")).toBe(true);
     expect(isVersionMismatchError("some unrelated error")).toBe(false);
     expect(isVersionMismatchError("")).toBe(false);

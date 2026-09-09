@@ -100,3 +100,63 @@ func TestGenerateMatchesProtocolMD5(t *testing.T) {
 		}
 	}
 }
+
+// TestGenerateSkipsUnchangedFiles 验证内容一致时 Generate 不重写文件：
+// 二次生成后 mtime 保持不变（无谓 mtime bump 会触发 opencode 插件热重载）。
+func TestGenerateSkipsUnchangedFiles(t *testing.T) {
+	outDir := t.TempDir()
+	if err := Generate(outDir); err != nil {
+		t.Fatalf("first Generate failed: %v", err)
+	}
+
+	name := filepath.Join(outDir, "octl-hook.js")
+	before, err := os.Stat(name)
+	if err != nil {
+		t.Fatalf("stat failed: %v", err)
+	}
+
+	if err := Generate(outDir); err != nil {
+		t.Fatalf("second Generate failed: %v", err)
+	}
+	after, err := os.Stat(name)
+	if err != nil {
+		t.Fatalf("stat after failed: %v", err)
+	}
+	if !after.ModTime().Equal(before.ModTime()) {
+		t.Errorf("file was rewritten despite identical content: mtime %v -> %v", before.ModTime(), after.ModTime())
+	}
+
+	// 原子写不留临时文件残留。
+	entries, err := os.ReadDir(outDir)
+	if err != nil {
+		t.Fatalf("readdir failed: %v", err)
+	}
+	for _, e := range entries {
+		if strings.Contains(e.Name(), ".tmp-") {
+			t.Errorf("temp file left behind: %s", e.Name())
+		}
+	}
+}
+
+// TestGenerateRewritesChangedFile 验证磁盘内容与渲染结果不一致时覆盖写。
+func TestGenerateRewritesChangedFile(t *testing.T) {
+	outDir := t.TempDir()
+	name := filepath.Join(outDir, "octl-hook.js")
+	if err := os.WriteFile(name, []byte("stale content"), 0644); err != nil {
+		t.Fatalf("seed stale file failed: %v", err)
+	}
+
+	if err := Generate(outDir); err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
+	got, err := os.ReadFile(name)
+	if err != nil {
+		t.Fatalf("read back failed: %v", err)
+	}
+	if string(got) == "stale content" {
+		t.Error("stale content was not replaced")
+	}
+	if strings.Contains(string(got), "{{OCTL_MD5}}") {
+		t.Error("rewritten content still contains placeholder")
+	}
+}

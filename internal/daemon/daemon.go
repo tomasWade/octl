@@ -168,6 +168,34 @@ func isSocketActive(path string) bool {
 	return true
 }
 
+// alignPluginsMu 串行化 alignPlugins（mismatch 兜底可能被多个连接并发触发）。
+var alignPluginsMu sync.Mutex
+
+// pluginsDirOverride 供测试注入插件对齐目录；空时用默认目录。
+var pluginsDirOverride string
+
+// alignPlugins 把内嵌模板的渲染结果写入默认插件目录
+// （~/.config/opencode/plugins/），md5 不一致才写。两个触发点：daemon 启动
+// 时、收到版本不符的 subscribe 时。由此升级流程收敛为「替换二进制 + 重启
+// daemon」：磁盘立即对齐，新启动的 opencode 直接用新插件；运行中的实例靠
+// opencode 的内容热重载（约 1 分钟）换新并自动重连。失败只记日志不阻塞。
+func alignPlugins() {
+	alignPluginsMu.Lock()
+	defer alignPluginsMu.Unlock()
+	dir := pluginsDirOverride
+	if dir == "" {
+		var err error
+		dir, err = plugins.DefaultOutputDir()
+		if err != nil {
+			log.Printf("[daemon] align plugins: resolve dir: %v", err)
+			return
+		}
+	}
+	if err := plugins.Generate(dir); err != nil {
+		log.Printf("[daemon] align plugins: %v", err)
+	}
+}
+
 // Run starts the state manager event loop and blocks until a fatal error
 // occurs. It performs an initial DB sync, listens on a Unix socket for
 // events and subscriber connections, runs a periodic DB sync every 30 s,
@@ -198,23 +226,17 @@ func (sm *StateManager) Run() error {
 	// Remove any stale socket file from a previous run.
 	_ = os.Remove(sockPath)
 
-	// Perform the initial database sync before accepting connections.
-	// When opencode is running it may hold SQLite locks; a failure here is
-	// non-fatal because the periodic sync will retry and live events still
-	// keep the state up to date.
-	//
-	// restoreState depends on stateMap being populated (stuck entries are
-	// matched against sessions that still exist in the database), so it is
-	// deferred until the first successful sync — here if possible, or from
-	// the periodic ticker when the initial sync fails.
-	initialSyncErr := sm.syncFromDB()
-	if initialSyncErr != nil {
-		fmt.Fprintf(os.Stderr, "state manager: initial sync failed (will retry): %v\n", initialSyncErr)
-	} else {
-		sm.restoreState()
-	}
+	// 启动对齐插件文件：把内嵌模板渲染结果写入默认插件目录（md5 不一致
+	// 才写），保证升级二进制并重启 daemon 后磁盘立即与当前协议一致。
+	// 失败只记日志（alignPlugins 内部处理），退化为人工 octl install。
+	alignPlugins()
 
-	// Start listening on the Unix socket.
+	// Start listening on the Unix socket BEFORE the initial DB sync: clients
+	// (TUI/sidebar/hook) can connect and complete their subscribe immediately
+	// during the whole restart window instead of hitting ECONNREFUSED while
+	// the sync (whose duration grows with session count) runs. Subscribers
+	// that arrive mid-sync get an empty view first; the full view is
+	// broadcast below once the initial sync completes.
 	ln, err := net.Listen("unix", sockPath)
 	if err != nil {
 		return fmt.Errorf("state manager: listen: %w", err)
@@ -242,6 +264,24 @@ func (sm *StateManager) Run() error {
 
 	defer func() { _ = ln.Close() }()
 	defer func() { _ = os.Remove(sockPath) }()
+
+	// Perform the initial database sync (non-fatal on failure: the periodic
+	// sync retries and live events keep the state up to date).
+	//
+	// restoreState depends on stateMap being populated (stuck entries are
+	// matched against sessions that still exist in the database), so it is
+	// deferred until the first successful sync — here if possible, or from
+	// the periodic ticker when the initial sync fails.
+	initialSyncErr := sm.syncFromDB()
+	if initialSyncErr != nil {
+		fmt.Fprintf(os.Stderr, "state manager: initial sync failed (will retry): %v\n", initialSyncErr)
+	} else {
+		sm.restoreState()
+	}
+	// 广播首帧：覆盖同步期间到达的订阅者先拿到的空视图。
+	sm.drainPending()
+	sm.pushSnapshot()
+	sm.pushView()
 
 	ticker := time.NewTicker(sm.dbSyncInterval)
 	defer ticker.Stop()
@@ -325,9 +365,12 @@ func (sm *StateManager) handleConn(conn net.Conn) {
 				cl.channels = []string{"snapshot"}
 			}
 
-			// 版本比对：客户端必须携带与当前协议一致的 Version，否则拒绝订阅并提示重新生成插件。
+			// 版本比对：客户端必须携带与当前协议一致的 Version，否则拒绝订阅。
+			// 拒绝前触发插件对齐兜底（防文件被手改/删除导致的漂移）：写盘后仍
+			// 拒绝本次订阅——旧代码客户端需等 opencode 热重载换新后自行重连。
 			if msg.Version != plugins.ProtocolMD5() {
 				log.Printf("[daemon] subscribe version mismatch: client=%s got=%s want=%s", conn.RemoteAddr(), msg.Version, plugins.ProtocolMD5())
+				alignPlugins()
 				cl.write(ResponseMsg{
 					Type:  "response",
 					Ok:    false,
@@ -1747,6 +1790,15 @@ func (sm *StateManager) syncFromDB() error {
 		return err
 	}
 
+	// 批量预取全部 session 的末条消息（一条 SQL，消逐条查询的 N+1）。
+	// 失败非致命：降级为"无消息"（UNKNOWN 派生），与单条查询失败的语义
+	// 一致，30s 周期会重试。
+	lastMsgs, err := sm.db.GetAllLastMessages()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "state manager: batch last-message fetch failed (statuses degrade to UNKNOWN this cycle): %v\n", err)
+		lastMsgs = nil
+	}
+
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
@@ -1760,7 +1812,7 @@ func (sm *StateManager) syncFromDB() error {
 			// Rule: not in memory → create new DB-derived entry.
 			sm.stateMap[s.ID] = &SessionState{
 				SessionID:  s.ID,
-				Status:     sm.deriveFromDB(s),
+				Status:     deriveStatusFromLastMessage(s.TimeArchived, lastMsgs[s.ID]),
 				Source:     SourceDB,
 				LastSyncAt: time.Now(),
 				Title:      s.Title,
@@ -1788,7 +1840,7 @@ func (sm *StateManager) syncFromDB() error {
 				// ERROR      ← session.idle（清 ErrorMsg）/ 下一个状态事件
 				if existing.Status != StatusPermission && existing.Status != StatusError {
 					// Event state is stale → DB takeover.
-					existing.Status = sm.deriveFromDB(s)
+					existing.Status = deriveStatusFromLastMessage(s.TimeArchived, lastMsgs[s.ID])
 					existing.Source = SourceDB
 					existing.ErrorMsg = ""
 					existing.PermType = ""
@@ -1797,7 +1849,7 @@ func (sm *StateManager) syncFromDB() error {
 			}
 			// Otherwise keep the event-derived status.
 		case SourceDB:
-			existing.Status = sm.deriveFromDB(s)
+			existing.Status = deriveStatusFromLastMessage(s.TimeArchived, lastMsgs[s.ID])
 		}
 	}
 
@@ -1843,7 +1895,9 @@ func (sm *StateManager) syncFromDB() error {
 	return nil
 }
 
-// deriveFromDB determines the initial SessionStatus from a database record.
+// deriveFromDB determines the initial SessionStatus from a database record
+// by querying the session's last message (single-session path, used by the
+// display path statusForSession; the DB-sync path uses the batch variant).
 //
 //   - If the session has a non-zero TimeArchived → ARCHIVED.
 //   - If the last message role is "assistant":
@@ -1859,8 +1913,17 @@ func (sm *StateManager) deriveFromDB(s types.Session) SessionStatus {
 	if err != nil {
 		return StatusUnknown
 	}
-	if role == "assistant" {
-		if completed == 0 {
+	return deriveStatusFromLastMessage(0, db.LastMessage{Role: role, Completed: completed})
+}
+
+// deriveStatusFromLastMessage 是批量路径的纯派生：不查库，输入来自
+// GetAllLastMessages 的预取结果（miss = 无消息 → UNKNOWN）。
+func deriveStatusFromLastMessage(timeArchived int64, last db.LastMessage) SessionStatus {
+	if timeArchived > 0 {
+		return StatusArchived
+	}
+	if last.Role == "assistant" {
+		if last.Completed == 0 {
 			return StatusBusy
 		}
 		return StatusIdle

@@ -23,9 +23,16 @@ import (
 var version = "dev"
 
 func main() {
-	// 子命令 "plugins" 必须在标准 flag 解析前拦截，否则 --output 等参数会被顶层 flag 吞掉。
+	// 子命令 "install" 必须在标准 flag 解析前拦截：一条命令完成插件生成 +
+	// tui.json 注册（教程主入口）。
+	if len(os.Args) > 1 && os.Args[1] == "install" {
+		os.Exit(runInstall(os.Args[2:]))
+	}
+
+	// 子命令 "plugins" 仅保留 "plugins install" 同义形态；旧 "plugins
+	// --output" 用法已作废，打印新用法并以退出码 2 退出。
 	if len(os.Args) > 1 && os.Args[1] == "plugins" {
-		os.Exit(runPlugins(os.Args[2:]))
+		os.Exit(runPluginsCmd(os.Args[2:]))
 	}
 
 	// 子命令 "query" 同样在标准 flag 解析前拦截：一次性查询 daemon 后退出，不进入 TUI。
@@ -99,7 +106,7 @@ func printMainUsage(out io.Writer, fs *flag.FlagSet) {
 	fmt.Fprintf(out, "Usage:\n")
 	fmt.Fprintf(out, "  octl [flags]           Launch the TUI (default)\n")
 	fmt.Fprintf(out, "  octl --daemon [flags]  Run the daemon service (foreground)\n")
-	fmt.Fprintf(out, "  octl plugins [flags]   Generate opencode plugin files\n")
+	fmt.Fprintf(out, "  octl install [flags]   Generate opencode plugins and register the sidebar\n")
 	fmt.Fprintf(out, "  octl query [flags]     One-shot daemon query: snaps | sessions | messages <id> | daily\n")
 	fmt.Fprintf(out, "  octl report [flags]    Write the daily raw digest (daily factual base)\n")
 	fmt.Fprintf(out, "  octl delete [flags]    Delete sessions (fuzzy id match, batch)\n")
@@ -111,8 +118,10 @@ func printMainUsage(out io.Writer, fs *flag.FlagSet) {
 	fs.SetOutput(out)
 	fs.PrintDefaults()
 	fmt.Fprintf(out, "\nSubcommands:\n")
-	fmt.Fprintf(out, "  plugins    Generate octl-hook.js and octl-sidebar.tsx opencode plugins\n")
-	fmt.Fprintf(out, "             Usage: octl plugins --output=<dir>\n")
+	fmt.Fprintf(out, "  install    Generate octl-hook.js and octl-sidebar.tsx and register the sidebar\n")
+	fmt.Fprintf(out, "             in ~/.config/opencode/tui.json\n")
+	fmt.Fprintf(out, "             Usage: octl install [--output=<dir>]\n")
+	fmt.Fprintf(out, "  plugins    Deprecated: use \"octl install\" (or \"octl plugins install\")\n")
 	fmt.Fprintf(out, "  query      Query the daemon without a TUI and exit\n")
 	fmt.Fprintf(out, "             Methods: snaps | sessions | messages <sessionId> | daily\n")
 	fmt.Fprintf(out, "             Run `octl query` with no arguments for full help\n")
@@ -131,18 +140,53 @@ func printMainUsage(out io.Writer, fs *flag.FlagSet) {
 	fmt.Fprintf(out, "             Usage: octl purge <sessionId>... [--yes]\n")
 }
 
-// runPlugins 处理 "octl plugins" 子命令：生成配套插件文件到指定目录。
-func runPlugins(args []string) int {
-	fs := flag.NewFlagSet("plugins", flag.ExitOnError)
-	outputDir := fs.String("output", ".", "Output directory for generated plugin files")
-	_ = fs.Parse(args) // ExitOnError：出错时已 os.Exit
-
-	if err := plugins.Generate(*outputDir); err != nil {
-		fmt.Fprintf(os.Stderr, "plugins: %v\n", err)
+// runInstall 处理 "octl install" 与 "octl plugins install" 子命令：生成
+// 插件文件并把 sidebar 注册进 ~/.config/opencode/tui.json（只追加不替换）。
+func runInstall(args []string) int {
+	defaultDir, err := plugins.DefaultOutputDir()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "install: resolve default output dir: %v\n", err)
 		return 1
 	}
-	fmt.Printf("generated octl-hook.js and octl-sidebar.tsx in %s\n", *outputDir)
+	fs := flag.NewFlagSet("install", flag.ExitOnError)
+	outputDir := fs.String("output", defaultDir, "Output directory for generated plugin files")
+	_ = fs.Parse(args) // ExitOnError：出错时已 os.Exit(2)
+
+	if fs.NArg() > 0 {
+		printInstallUsage(os.Stderr)
+		return 2
+	}
+
+	summary, err := plugins.Install(*outputDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "install: %v\n", err)
+		return 1
+	}
+	for _, line := range summary {
+		fmt.Println(line)
+	}
+	fmt.Println("restart opencode for the sidebar panel to take effect")
 	return 0
+}
+
+// runPluginsCmd 处理 "octl plugins ..."：仅接受 "plugins install" 同义
+// 形态；其余（含已作废的旧 "plugins --output" 用法）打印新用法退出码 2。
+func runPluginsCmd(args []string) int {
+	if len(args) > 0 && args[0] == "install" {
+		return runInstall(args[1:])
+	}
+	printInstallUsage(os.Stderr)
+	return 2
+}
+
+// printInstallUsage 输出 install 子命令用法（含 plugins 旧用法的迁移提示）。
+func printInstallUsage(w io.Writer) {
+	fmt.Fprintf(w, `"octl plugins --output=<dir>" is deprecated.`+"\n")
+	fmt.Fprintf(w, "\nGenerate the opencode plugins and register the sidebar in tui.json:\n")
+	fmt.Fprintf(w, "  octl install [--output=<dir>]\n")
+	fmt.Fprintf(w, "  octl plugins install [--output=<dir>]   (same as above)\n")
+	fmt.Fprintf(w, "\nThe default output directory is ~/.config/opencode/plugins.\n")
+	fmt.Fprintf(w, "Run `octl --help` for the full command overview.\n")
 }
 
 // runDaemon starts the octl state manager and blocks until it exits.

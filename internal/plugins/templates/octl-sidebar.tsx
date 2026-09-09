@@ -63,7 +63,8 @@ export function friendlyError(err: string): string {
 }
 
 // 纯函数：判断 daemon 返回的错误是否为协议版本不一致（version mismatch / old binary）。
-// sidebar 以此识别「需要重新生成插件并重启 opencode」的场景，停止无效重连。
+// sidebar 以此识别「插件与 daemon 版本漂移」的场景：停止 2s 盲重连，改挂 60s
+// 慢速重试保险网（daemon 会自动修复插件文件，等 opencode 热重载换新实例）。
 export function isVersionMismatchError(err: string): boolean {
   return err.includes("version mismatch") || err.includes("old binary");
 }
@@ -1096,6 +1097,9 @@ export default {
     let socket: Socket | null = null;
     let disposed = false;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    // 版本不一致后的 60s 慢速重试保险网（正常路径是 daemon 修复文件 → opencode
+    // 热重载换新实例；本 timer 只兜底热重载失效的极端场景）。
+    let slowRetryTimer: ReturnType<typeof setTimeout> | null = null;
     let readBuf = "";
 
     function scheduleRetry() {
@@ -1106,10 +1110,25 @@ export default {
       }, 2000);
     }
 
+    // 60s 慢速重试：触发前重置 versionMismatch，让重连走完整流程（若 daemon
+    // 侧已对齐，会正常收到 subscribed 并恢复）。
+    function scheduleSlowRetry() {
+      if (disposed || slowRetryTimer) return;
+      slowRetryTimer = setTimeout(() => {
+        slowRetryTimer = null;
+        setVersionMismatch(false);
+        connect();
+      }, 60000);
+    }
+
     function clearRetry() {
       if (retryTimer) {
         clearTimeout(retryTimer);
         retryTimer = null;
+      }
+      if (slowRetryTimer) {
+        clearTimeout(slowRetryTimer);
+        slowRetryTimer = null;
       }
     }
 
@@ -1185,11 +1204,15 @@ export default {
         if (msg.type === "response" && msg.ok === false) {
           const err = String(msg.error || "unknown error");
           if (isVersionMismatchError(err)) {
-            // 版本不一致：显示明确错误并停止重连，避免 2 秒盲重连刷屏。
+            // 版本不一致：显示明确错误并停止 2s 盲重连（重连只会再次被拒，
+            // 刷屏日志）；改挂 60s 慢速重试保险网——正常情况下 daemon 已自动
+            // 修复插件文件、opencode 约 1 分钟内热重载换新实例，本 timer 只
+            // 兜底热重载失效的极端场景。
             setVersionMismatch(true);
             setConnected(false);
-            setError("插件与 daemon 版本不一致，请运行 octl plugins 重新生成并重启 opencode");
+            setError("插件与 daemon 版本不一致：daemon 已自动更新插件文件，opencode 约 1 分钟内热重载；未恢复请重启 opencode 或运行 octl install");
             log("version mismatch from daemon: " + err);
+            scheduleSlowRetry();
             if (socket) {
               try {
                 socket.end();

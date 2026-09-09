@@ -12,6 +12,13 @@
 #
 # 说明：ExecStart 默认指向 go install 的路径（~/go/bin/octl）；
 # 二进制在别处（如 ~/bin）请自行修改。
+#
+# 升级流程（其余全自动）：
+#   1. 替换二进制（go install ...@latest 或解压 release tar 到 ~/go/bin）
+#   2. systemctl --user restart octl
+# daemon 重启时会把与当前协议匹配的插件自动写入 ~/.config/opencode/plugins/
+# （md5 不一致才写）；新启动的 opencode 直接用新插件，运行中的实例约 1 分钟
+# 内热重载并自动重连，无需手动重新生成插件或重启 opencode。
 
 [Unit]
 Description=octl daemon (opencode session manager)
@@ -20,7 +27,7 @@ Documentation=https://github.com/tomasWade/octl
 [Service]
 ExecStart=%h/go/bin/octl --daemon
 Restart=on-failure
-RestartSec=3
+RestartSec=1
 
 [Install]
 WantedBy=default.target

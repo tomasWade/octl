@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // withStatePath 把 state.json 路径注入到临时目录执行 fn，结束后恢复。
@@ -244,6 +245,100 @@ func TestRestoreDeferredUntilSync(t *testing.T) {
 		defer sm2.mu.Unlock()
 		if sm2.stateMap["ses_k"].Status != StatusPermission || sm2.stateMap["ses_k"].PermType != "bash" {
 			t.Errorf("延迟恢复失败: %+v", sm2.stateMap["ses_k"])
+		}
+	})
+}
+
+// TestSaveState_ProcessRetention 进程映射只保存 LastSeenAt 在保留窗口内的
+// 条目；过期条目不落盘。
+func TestSaveState_ProcessRetention(t *testing.T) {
+	withStatePath(t, func(path string) {
+		database := setupDBWithData(t, func(wdb *sql.DB) {})
+		defer database.Close()
+		sm := NewStateManager(database)
+		now := time.Now()
+		sm.mu.Lock()
+		sm.sessionProcess["ses_fresh"] = &ProcessInfo{PID: 111, TMUXPane: "%1", TMUXSession: "$1", LastSeenAt: now.UnixMilli()}
+		sm.sessionProcess["ses_stale"] = &ProcessInfo{PID: 222, LastSeenAt: now.Add(-10 * time.Minute).UnixMilli()}
+		sm.mu.Unlock()
+		sm.saveState()
+
+		b, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read: %v", err)
+		}
+		var st daemonState
+		if err := json.Unmarshal(b, &st); err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+		if st.Version != 2 {
+			t.Errorf("version = %d, want 2", st.Version)
+		}
+		if len(st.Processes) != 1 {
+			t.Fatalf("processes = %+v, want only fresh entry", st.Processes)
+		}
+		if st.Processes[0].SessionID != "ses_fresh" || st.Processes[0].PID != 111 || st.Processes[0].TmuxPane != "%1" {
+			t.Errorf("fresh entry fields: %+v", st.Processes[0])
+		}
+	})
+}
+
+// TestRestoreState_Processes_Liveness 进程映射恢复：活进程（本测试进程）
+// 灌回 sessionProcess/pidIndex，死 pid 跳过。
+func TestRestoreState_Processes_Liveness(t *testing.T) {
+	withStatePath(t, func(path string) {
+		st := daemonState{
+			Version:   stateVersion,
+			Favorites: []string{},
+			Stuck:     []stuckRecord{},
+			Processes: []processRecord{
+				{SessionID: "ses_live", PID: int64(os.Getpid()), TmuxPane: "%5", TmuxSession: "$9", LastSeenAt: time.Now().UnixMilli()},
+				{SessionID: "ses_dead", PID: -1, LastSeenAt: time.Now().UnixMilli()}, // PID<=0 无效
+			},
+		}
+		b, _ := json.Marshal(&st)
+		if err := os.WriteFile(path, b, 0o644); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+
+		database := setupDBWithData(t, func(wdb *sql.DB) {})
+		defer database.Close()
+		sm := NewStateManager(database)
+		sm.restoreState()
+
+		sm.mu.Lock()
+		defer sm.mu.Unlock()
+		info, ok := sm.sessionProcess["ses_live"]
+		if !ok || info == nil {
+			t.Fatal("live process entry not restored")
+		}
+		if info.TMUXPane != "%5" || info.TMUXSession != "$9" {
+			t.Errorf("restored fields: %+v", info)
+		}
+		if _, ok := sm.pidIndex[int64(os.Getpid())]["ses_live"]; !ok {
+			t.Error("pidIndex not populated for live pid")
+		}
+		if _, ok := sm.sessionProcess["ses_dead"]; ok {
+			t.Error("dead/invalid pid entry should not be restored")
+		}
+	})
+}
+
+// TestRestoreState_V1FileAccepted v1 state.json（无进程段）正常加载。
+func TestRestoreState_V1FileAccepted(t *testing.T) {
+	withStatePath(t, func(path string) {
+		v1 := `{"version":1,"savedAt":1000,"favorites":["ses_old"],"stuck":[]}`
+		if err := os.WriteFile(path, []byte(v1), 0o644); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		database := setupDBWithData(t, func(wdb *sql.DB) {})
+		defer database.Close()
+		sm := NewStateManager(database)
+		sm.restoreState()
+		sm.mu.Lock()
+		defer sm.mu.Unlock()
+		if !sm.favoritesSet["ses_old"] {
+			t.Error("v1 favorites should be restored")
 		}
 	})
 }

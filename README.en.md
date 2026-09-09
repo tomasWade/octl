@@ -16,7 +16,7 @@ octl gives you a single terminal view of every opencode session on your machine:
 - **Terminal TUI console** — a project/session tree with multi-select batch delete / export, favorites (★ persisted), create / fork / send message — all routed through the daemon via the opencode CLI
 - **Real-time status overview** — BUSY / RETRY / IDLE / PERMISSION / ERROR / ARCHIVED pushed live; permission waits (🟡) are visible at a glance, no more forgotten agents
 - **📊 Usage stats** — total sessions / active sessions / cost / tokens
-- **📅 Daily raw digest** — `octl report` writes a mechanical fact layer (active lines + user-message skeletons + deletion obituaries) for skills / agents to narrate (see a full consumer example in [examples/skills](examples/skills/六耳/SKILL.md))
+- **📅 Daily raw digest** — `octl report` writes a mechanical fact layer on demand (active lines + user-message skeletons) for skills / agents to narrate (see a full consumer example in [examples/skills](examples/skills/六耳/SKILL.md)); the full history of deleted sessions is preserved by the shadow archive
 - **🔒 Safe** — fully offline; SQLite opened read-only via `?mode=ro`; deletions go through `opencode session delete`, never direct DB writes
 
 The sidebar panel embedded in opencode (real recording — "Favorites / All" tab switching, the favorites list, and a ↗ click jumping straight to the tmux window where "run e2e tests" lives):
@@ -31,12 +31,12 @@ The standalone terminal console (`octl`, animated):
 
 ```bash
 go install github.com/tomasWade/octl@latest
-octl plugins --output=~/.config/opencode/plugins/   # generate opencode plugins (recommended)
-octl --daemon &                                     # start the daemon
+octl install                                        # generate opencode plugins and register the sidebar (recommended)
+octl --daemon &                                     # start the daemon (ad-hoc; dies with this terminal — see "Keeping the daemon running")
 octl                                                # open the TUI
 ```
 
-Requirements: Go 1.25+, and existing opencode data on the machine (`~/.local/share/opencode/opencode.db`). The sidebar panel additionally needs the plugin registered in `~/.config/opencode/tui.json` (see "Installing the opencode plugins" below).
+Requirements: Go 1.25+ if you build via `go install` or from source (not needed for prebuilt binaries); existing opencode data on the machine (`~/.local/share/opencode/opencode.db`). `go install` puts `octl` into `$(go env GOPATH)/bin` (usually `~/go/bin`) — make sure that directory is on your `PATH`.
 
 No Go toolchain? Grab a prebuilt binary from [Releases](https://github.com/tomasWade/octl/releases) (linux/darwin × amd64/arm64), put it on your `PATH`; see "Keeping the daemon running" below for making it persistent.
 
@@ -133,7 +133,7 @@ SQLite (read-only) ──▶ octl daemon ──ViewMsg──▶ octl TUI / sideb
    ./octl --tui
    ```
 
-On startup the TUI connects to the daemon's Unix socket. If the daemon isn't running, the TUI won't exit — it shows `🔴 OFFLINE` in the top-right corner and retries every 5 seconds; once the daemon is back it shows `🟢 ONLINE` and resumes.
+On startup the TUI connects to the daemon's Unix socket. If the daemon isn't running, the TUI won't exit — it shows `🔴 OFFLINE` in the top-right corner and retries with exponential backoff (250ms first attempt, backing off to a 5s cap); once the daemon is back it shows `🟢 ONLINE` and resumes.
 
 ### CLI Flags
 
@@ -145,7 +145,7 @@ On startup the TUI connects to the daemon's Unix socket. If the daemon isn't run
 | `--socket` | `~/.local/share/octl/octl.sock` | Unix socket path |
 | `--refresh-time` | `5` | Deprecated; refresh is daemon-push driven, the TUI no longer polls |
 
-Subcommands: `plugins` (generate opencode plugins), `query` (one-shot queries), and four action subcommands `delete` / `create` / `fork` / `send` (see the next two sections).
+Subcommands: `install` (generate opencode plugins and register the sidebar), `query` (one-shot queries), and four action subcommands `delete` / `create` / `fork` / `send` (see the next two sections). The old `octl plugins --output` usage has been replaced by `octl install`.
 
 ## One-shot Queries (`octl query`)
 
@@ -236,9 +236,8 @@ octl report --from 2026-09-01        # a range window (file name = start date)
 ```
 
 - **`<date>.raw.md`**: metadata of the day's active sessions + verbatim user-message skeletons + a machine-readable stats line; fully overwritten each time (latest is truth).
-- **`deleted/<date>.md`**: a full-history "obituary" written automatically before a session is deleted (append-only, never overwritten) — a deleted session's history survives the DB.
-- **Automatic writes**: the daemon writes on startup and checks periodically (today's raw digest is refreshed if older than 4 hours; yesterday's final version is backfilled), fitting non-server schedules (write as soon as the machine boots).
-- Delete sessions any time: the obituary mechanism guarantees zero history loss.
+- **On demand only**: `octl report` is the single entry point for exporting markdown digests — run it whenever you need the file.
+- **Deletion never loses history**: the shadow archive (`~/.local/share/octl/shadow.db`) keeps mirroring the full history of deleted sessions — `octl query messages` reads deleted lines from the shadow archive (marked `[deleted]`), and `octl query daily` includes them in its aggregates; the only true-deletion exit is `octl purge` (180-day retention by default).
 
 ## The Real-time Daemon
 
@@ -272,43 +271,31 @@ Logs: `journalctl --user -u octl -f`. If the binary lives somewhere other than `
 
 ### Installing the opencode plugins
 
-octl relies on two opencode plugins working together:
-
-#### 1. Server plugin (event forwarding)
-
-Generate it into opencode's plugins directory:
+octl relies on two opencode plugins working together — one command generates and registers both:
 
 ```bash
-octl plugins --output=~/.config/opencode/plugins/
+octl install
 ```
 
-Every opencode instance auto-loads it on startup. It will:
-- Connect to the octl daemon over a Unix socket
-- Filter and forward 11 target event types in real time
-- Maintain a 500-entry FIFO buffer (buffers while the daemon is down, replays on connect)
-- Reconnect every 2 seconds after a disconnect
+It will:
+
+- Generate `octl-hook.js` and `octl-sidebar.tsx` into `~/.config/opencode/plugins/` (`--output=<dir>` selects a different directory)
+- Register the sidebar in the `plugin` array of `~/.config/opencode/tui.json` (append-only, never replacing: your existing entries stay untouched; a corrupt JSON aborts with an error instead of overwriting your file)
 
 > The plugin runs on the Bun runtime (built into opencode) with no external npm dependencies.
 
-> Generated files carry a protocol version constant `OCTL_PROTOCOL_VERSION` matching the `octl` binary. If the plugin was generated by an older `octl`, the daemon rejects the subscription with `octl version mismatch — run "octl plugins" to regenerate` (the TUI shows the same hint top-right; the sidebar shows a version-mismatch error and stops retrying). Re-run `octl plugins --output=...` and **restart opencode** to align (a running opencode does not hot-reload plugin files; stale plugins keep being rejected).
+> Generated files carry a protocol version constant `OCTL_PROTOCOL_VERSION` matching the `octl` binary. On startup the daemon automatically writes protocol-matching plugins into `~/.config/opencode/plugins/` (skipped when the content already matches); on a version mismatch the daemon rejects the subscription and repairs the files the same way — running opencode instances hot-reload the new plugin within about a minute and reconnect automatically, so upgrading octl is just **replace the binary and restart the daemon**. In the rare case it doesn't recover, restart the opencode instance or run `octl install` manually.
 
-#### 2. TUI plugin (the sidebar panel)
-
-Register it via `~/.config/opencode/tui.json` — add it to the `plugin` array:
-
-```json
-{
-  "$schema": "https://opencode.ai/tui.json",
-  "plugin": [
-    "file:///home/<user>/.config/opencode/plugins/octl-sidebar.tsx"
-  ]
-}
-```
-
-- Must be an absolute `file://` path.
-- Restart the opencode TUI after changing the plugin file or updating.
-
-> The current sidebar subscribes directly to the daemon-pushed `ViewMsg` and no longer sends `request/listSessions`.
+> tui.json entries are machine-specific absolute paths (JSON does not expand `~`) — syncing dotfiles to a new machine leaves stale `file://` entries behind; re-running `octl install` on the new machine fixes it. To register manually instead, the `plugin` array takes absolute `file://` entries (replace `<user>` with your username):
+>
+> ```json
+> {
+>   "$schema": "https://opencode.ai/tui.json",
+>   "plugin": [
+>     "file:///home/<user>/.config/opencode/plugins/octl-sidebar.tsx"
+>   ]
+> }
+> ```
 
 ### opencode Sidebar Integration
 
@@ -457,11 +444,11 @@ octl touches four tables — `project`, `session`, `message`, `part` — with `S
 # Build the binary
 go build -o octl .
 
-# Generate opencode plugins (octl-hook.js + octl-sidebar.tsx)
-octl plugins --output=~/.config/opencode/plugins/
+# Generate opencode plugins (octl-hook.js + octl-sidebar.tsx) and register the sidebar
+octl install
 ```
 
-Generated plugins embed a protocol version constant matching the binary; regenerate after upgrading octl.
+Generated plugins embed a protocol version constant matching the binary; to upgrade, replace the binary and restart the daemon — the daemon aligns the plugin files automatically (see "Installing the opencode plugins" above).
 
 ## Testing
 

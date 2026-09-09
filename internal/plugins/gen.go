@@ -56,7 +56,59 @@ func ProtocolMD5() string {
 	return computeProtocolMD5()
 }
 
-// Generate 将内嵌模板写入 outputDir，并把模板中的版本占位符替换为 ProtocolMD5()。
+// renderedFile 是一份渲染完成的待写文件。
+type renderedFile struct {
+	Name    string
+	Content string
+}
+
+// RenderedFiles 将内嵌模板中的版本占位符替换为 ProtocolMD5()，返回待写
+// 文件列表。daemon 的启动对齐（alignPlugins）与 Generate 共用此渲染结果。
+func RenderedFiles() []renderedFile {
+	md5Value := ProtocolMD5()
+	return []renderedFile{
+		{Name: "octl-hook.js", Content: strings.ReplaceAll(hookTemplate, placeholder, md5Value)},
+		{Name: "octl-sidebar.tsx", Content: strings.ReplaceAll(sidebarTemplate, placeholder, md5Value)},
+	}
+}
+
+// writeIfChanged 在磁盘内容与 content 的 md5 不一致时才写盘（临时文件 +
+// rename 原子替换）；文件不存在视为不一致直接写。内容相同时跳过写盘，
+// 避免无谓的 mtime bump 触发 opencode 的插件热重载。
+func writeIfChanged(path, content string) error {
+	b := []byte(content)
+	if existing, err := os.ReadFile(path); err == nil {
+		sumExisting := md5.Sum(existing)
+		sumNew := md5.Sum(b)
+		if sumExisting == sumNew {
+			return nil
+		}
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	if _, err := tmp.Write(b); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpName)
+		return err
+	}
+	// CreateTemp 产物是 0600；对齐旧的 os.WriteFile 行为（0644），避免内容
+	// 更新时把既有 0644 文件静默降权（备份工具等跨用户读取会受影响）。
+	if err := os.Chmod(tmpName, 0o644); err != nil {
+		_ = os.Remove(tmpName)
+		return err
+	}
+	return os.Rename(tmpName, path)
+}
+
+// Generate 将内嵌模板写入 outputDir，并把模板中的版本占位符替换为
+// ProtocolMD5()；内容一致时跳过写盘（md5 比对，避免无谓 mtime bump）。
 // outputDir 支持 ~ 前缀（shell 不会展开参数中的 ~，这里统一收口）。
 func Generate(outputDir string) error {
 	outputDir, err := paths.ExpandHome(outputDir)
@@ -67,22 +119,32 @@ func Generate(outputDir string) error {
 		return fmt.Errorf("generate plugin: %w", err)
 	}
 
-	md5Value := ProtocolMD5()
-	files := []struct {
-		name string
-		tpl  string
-	}{
-		{name: "octl-hook.js", tpl: hookTemplate},
-		{name: "octl-sidebar.tsx", tpl: sidebarTemplate},
-	}
-
-	for _, f := range files {
-		out := strings.ReplaceAll(f.tpl, placeholder, md5Value)
-		path := filepath.Join(outputDir, f.name)
-		if err := os.WriteFile(path, []byte(out), 0644); err != nil {
+	for _, f := range RenderedFiles() {
+		path := filepath.Join(outputDir, f.Name)
+		if err := writeIfChanged(path, f.Content); err != nil {
 			return fmt.Errorf("generate plugin: %w", err)
 		}
 	}
 
 	return nil
+}
+
+// DefaultOutputDir 返回插件默认输出目录 ~/.config/opencode/plugins
+// （octl install 的 --output 缺省值，也是 daemon 启动对齐的目标目录）。
+func DefaultOutputDir() (string, error) {
+	return expandOpencodePath("plugins")
+}
+
+// TUIConfigPath 返回 opencode TUI 插件注册文件 ~/.config/opencode/tui.json。
+func TUIConfigPath() (string, error) {
+	return expandOpencodePath("tui.json")
+}
+
+// expandOpencodePath 展开 ~/.config/opencode 下的相对路径。
+func expandOpencodePath(rel string) (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".config", "opencode", rel), nil
 }

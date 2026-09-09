@@ -66,6 +66,7 @@ type Model struct {
 	daemonClient          *daemon.SocketClient
 	daemonOnline          bool
 	daemonVersionMismatch bool // daemonVersionMismatch 在 daemon 返回协议版本不匹配响应时置位，header 显示升级提示。
+	reconnectAttempts     int  // 连续重连失败计数，驱动 reconnectDelay 退避曲线；连上即清零。
 	daemonMsgCh           chan interface{}
 	favoritesMap          map[string]bool // 本端收藏集合，跨视图、跨 ViewMsg 刷新保持
 }
@@ -167,9 +168,26 @@ func (m Model) waitForDaemonMsg() tea.Msg {
 // another waitForDaemonMsg call, keeping the read loop alive.
 type waitForNextDaemonMsg struct{}
 
-// scheduleReconnect 在 5 秒后触发一次重连。
+// reconnectDelays 是重连退避曲线：快首试 + 指数退避 + 封顶。daemon 重启
+// 窗口通常在秒级，250ms 首试让 TUI 几乎无缝恢复；持续离线时逐级退到 5s
+// 封顶，避免高频空连。
+var reconnectDelays = []time.Duration{250 * time.Millisecond, 500 * time.Millisecond, time.Second, 2 * time.Second, 5 * time.Second}
+
+// reconnectDelay 返回第 attempts 次（0 起）连续失败后的重连延迟。
+func reconnectDelay(attempts int) time.Duration {
+	if attempts < 0 {
+		attempts = 0
+	}
+	if attempts >= len(reconnectDelays) {
+		return reconnectDelays[len(reconnectDelays)-1]
+	}
+	return reconnectDelays[attempts]
+}
+
+// scheduleReconnect 按退避曲线在 reconnectDelay(attempts) 后触发一次重连。
 func (m Model) scheduleReconnect() tea.Cmd {
-	return tea.Tick(5*time.Second, func(time.Time) tea.Msg {
+	delay := reconnectDelay(m.reconnectAttempts)
+	return tea.Tick(delay, func(time.Time) tea.Msg {
 		return reconnectDaemonMsg{}
 	})
 }
@@ -240,6 +258,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		log.Printf("[tui] daemon online, starting consumeDaemonMsgs")
 		m.daemonOnline = true
 		m.daemonClient = msg.client
+		m.reconnectAttempts = 0 // 连上即清零退避计数，下次断连从快首试开始
 		go m.consumeDaemonMsgs(msg.client)
 		return m, m.waitForDaemonMsg
 
@@ -252,6 +271,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			_ = m.daemonClient.Close()
 			m.daemonClient = nil
 		}
+		m.reconnectAttempts++
 		return m, tea.Batch(m.scheduleReconnect(), m.waitForDaemonMsg)
 
 	case daemonViewMsg:

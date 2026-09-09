@@ -311,6 +311,50 @@ LIMIT 1`
 	return role, completedMs, nil
 }
 
+// LastMessage 是单个 session 末条消息的派生输入（role + completed）。
+type LastMessage struct {
+	Role      string
+	Completed int64
+}
+
+// GetAllLastMessages 一条 SQL 批量返回全部 session 的末条消息
+// role/completed（sessionID -> LastMessage）。供 daemon 的 DB 同步消 N+1：
+// 逐 session 调 GetLastMessageRoleCompleted 在 session 数百时是秒级开销。
+// 无消息的 session 不出现在结果中；同 session 末条时间并列时取任意一条
+// （与单条版 ORDER BY ... LIMIT 1 的并列不确定性一致）。
+func (d *DB) GetAllLastMessages() (map[string]LastMessage, error) {
+	query := `
+SELECT m.session_id,
+       COALESCE(json_extract(m.data, '$.role'), ''),
+       COALESCE(json_extract(m.data, '$.time.completed'), 0)
+FROM message m
+JOIN (
+	SELECT session_id, MAX(time_created) AS max_t
+	FROM message
+	GROUP BY session_id
+) latest ON m.session_id = latest.session_id AND m.time_created = latest.max_t`
+
+	rows, err := d.db.Query(query)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	result := make(map[string]LastMessage)
+	for rows.Next() {
+		var sid string
+		var lm LastMessage
+		if err := rows.Scan(&sid, &lm.Role, &lm.Completed); err != nil {
+			return nil, err
+		}
+		result[sid] = lm
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
 // GetMessageActivity 返回时间窗口 [from, to) 内按 session 聚合的消息活动：
 // 每个有消息的 session 的消息数与首末消息时间（unix 毫秒）。
 // 结果无特定顺序，调用方自行排序。

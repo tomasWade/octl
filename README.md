@@ -16,7 +16,7 @@ octl 让你在单个终端里总览本机全部 opencode 会话：谁在跑、�
 - **终端 TUI 管理台** — project / session 树形视图，多选批量删除 / 导出、收藏（★ 持久化）、新建 / fork / 发消息，全部经 daemon 走 opencode CLI
 - **实时状态总览** — BUSY / RETRY / IDLE / PERMISSION / ERROR / ARCHIVED 实时推送；权限等待（🟡）一眼可见，不再有被遗忘的 agent
 - **📊 用量统计** — 总 session 数 / 活跃数 / 费用 / Token
-- **📅 日报底片** — `octl report` 落盘机械事实层（活跃线 + 用户消息骨架 + 删除讣告），供 skill / agent 做叙事总结（消费方示例：[examples/skills](examples/skills/六耳/SKILL.md)）
+- **📅 日报底片** — `octl report` 按需落盘机械事实层（活跃线 + 用户消息骨架），供 skill / agent 做叙事总结（消费方示例：[examples/skills](examples/skills/六耳/SKILL.md)）；被删 session 的全史由影子库保全
 - **🔒 安全** — 完全离线；SQLite 以 `?mode=ro` 只读打开；删除走 `opencode session delete`，不直接写库
 
 opencode 内嵌的 sidebar 面板（真实录制——「收藏 / 全部」tab 切换、收藏列表、点击 ↗ 一键跳转到「跑 e2e 测试」所在 的 tmux 窗口）：
@@ -31,12 +31,12 @@ opencode 内嵌的 sidebar 面板（真实录制——「收藏 / 全部」tab �
 
 ```bash
 go install github.com/tomasWade/octl@latest
-octl plugins --output=~/.config/opencode/plugins/   # 生成 opencode 插件（推荐）
-octl --daemon &                                     # 启动守护进程
+octl install                                        # 生成 opencode 插件并注册 sidebar 面板（推荐）
+octl --daemon &                                     # 启动守护进程（临时后台，关终端即停；常驻见「让 daemon 常驻」）
 octl                                                # 打开 TUI
 ```
 
-要求：Go 1.25+，本机已有 opencode 数据（`~/.local/share/opencode/opencode.db`）。sidebar 面板还需在 `~/.config/opencode/tui.json` 注册插件（见下文「安装 opencode 插件」）。
+要求：走 `go install` 或源码构建需 Go 1.25+（下载预编译二进制无需 Go）；本机已有 opencode 数据（`~/.local/share/opencode/opencode.db`）。`go install` 会把 `octl` 装到 `$(go env GOPATH)/bin`（通常 `~/go/bin`），请确保该目录在 PATH 中。
 
 没有 Go 环境时，可从 [Releases](https://github.com/tomasWade/octl/releases) 下载预编译二进制（linux/darwin × amd64/arm64），解压后放进 PATH；daemon 常驻见下文「让 daemon 常驻」。
 
@@ -135,7 +135,7 @@ octl 现在分为两个进程：
    ./octl --tui
    ```
 
-TUI 启动时会尝试连接 daemon 监听的 Unix socket。如果 daemon 未运行，TUI 不会退出，右上角会显示 `🔴 OFFLINE`，并每 5 秒自动重连；恢复后显示 `🟢 ONLINE` 并继续刷新状态。
+TUI 启动时会尝试连接 daemon 监听的 Unix socket。如果 daemon 未运行，TUI 不会退出，右上角会显示 `🔴 OFFLINE`，并按指数退避自动重连（250ms 首试，逐级退至 5s 封顶）；恢复后显示 `🟢 ONLINE` 并继续刷新状态。
 
 ### 命令行参数
 
@@ -147,7 +147,7 @@ TUI 启动时会尝试连接 daemon 监听的 Unix socket。如果 daemon 未运
 | `--socket` | `~/.local/share/octl/octl.sock` | Unix socket 路径 |
 | `--refresh-time` | `5` | 已废弃；刷新由 daemon 推送驱动，TUI 不再本地轮询 |
 
-另有子命令 `plugins`（生成 opencode 插件）、`query`（一次性查询）和四个动作子命令 `delete` / `create` / `fork` / `send`（见下两节）。
+另有子命令 `install`（生成 opencode 插件并注册 tui.json）、`query`（一次性查询）和四个动作子命令 `delete` / `create` / `fork` / `send`（见下两节）；旧 `octl plugins --output` 用法已由 `octl install` 取代。
 
 ## 命令行查询（octl query）
 
@@ -238,9 +238,8 @@ octl report --from 2026-09-01        # 范围窗口（文件名取起点日期�
 ```
 
 - **`<date>.raw.md`**：当日活跃 session 的元数据 + 用户消息骨架原文 + 机器可读统计行；整体覆盖（最新即真相）。
-- **`deleted/<date>.md`**：删除 session 前自动写入的全史"讣告"（追加写，永不覆盖）——被删 session 的历史不随 DB 消失。
-- **daemon 自动落盘**：启动时 + 周期检查（当日底片超 4 小时未刷新即覆盖写，另自动补昨日终版），适配非服务器作息（开机即写）。
-- 删除 session 任何时刻都可以：讣告机制保证历史零丢失。
+- **仅手动触发**：`octl report` 是按需导出 md 的唯一入口，需要底片文件时随时执行。
+- **删除不失史**：被删 session 的全史由影子库（`~/.local/share/octl/shadow.db`）持续保全——`octl query messages` 对已删线读影子库全史（带 `[deleted]` 标记），`octl query daily` 口径含被删线；真删除唯一出口是 `octl purge`（默认 180 天保留期）。
 
 ## 实时状态守护进程
 
@@ -259,45 +258,46 @@ octl 包含一个独立的守护进程（daemon），通过 Unix socket 接收 o
 4. 将完整的 `ViewMsg`（projects / sessions / stats / favorites）通过 Unix socket 推送给已订阅的 TUI 和 sidebar 客户端
 5. 接收并执行 TUI 发来的管理操作请求（delete / export / create / fork / send / favorite / unfavorite），收藏由 daemon 统一维护并持久化到 `~/.local/share/octl/state.json`（重启恢复）
 
-### 安装 opencode 插件
+### 让 daemon 常驻（systemd 用户服务）
 
-octl 需要两个 opencode 插件协同工作：
-
-#### 1. Server 插件（事件转发）
-
-使用 `octl plugins` 命令生成插件到 opencode 的 plugins 目录：
+仓库附带 systemd 用户服务示例（无需 root）：
 
 ```bash
-octl plugins --output=~/.config/opencode/plugins/
+mkdir -p ~/.config/systemd/user
+cp scripts/octl.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now octl
 ```
 
-每个 opencode 实例启动时自动加载该插件，它会：
-- 通过 Unix socket 连接到 octl 守护进程
-- 过滤 11 类目标事件并实时转发
-- 维护 500 条 FIFO 缓冲区（daemon 未运行时缓冲，连接后重放）
-- 连接断开时每 2 秒自动重连
+日志：`journalctl --user -u octl -f`。若二进制不在 `~/go/bin`，请修改 unit 文件中的 `ExecStart`。
+
+### 安装 opencode 插件
+
+octl 需要两个 opencode 插件协同工作，一条命令即可完成生成与注册：
+
+```bash
+octl install
+```
+
+该命令会：
+
+- 生成 `octl-hook.js` 与 `octl-sidebar.tsx` 到 `~/.config/opencode/plugins/`（`--output=<dir>` 可指定其他目录）
+- 把 sidebar 注册进 `~/.config/opencode/tui.json` 的 `plugin` 数组（只追加、不替换：已有其他插件条目原样保留；JSON 损坏时报错退出、不覆盖你的文件）
 
 > 插件使用 Bun 运行时（opencode 内置），不依赖任何外部 npm 包。
 
-> 生成的文件头部带有与当前 `octl` 二进制匹配的协议版本常量 `OCTL_PROTOCOL_VERSION`。若插件由旧版 `octl` 生成，daemon 会拒绝订阅并返回 `octl version mismatch — run "octl plugins" to regenerate`（TUI 右上角同步显示该提示，sidebar 面板显示版本不一致错误并停止重连）；重新执行 `octl plugins --output=...` 生成**并重启 opencode** 即可对齐（运行中的 opencode 不会热重载插件文件，旧插件会持续被 daemon 拒绝）。
+> 生成的文件头部带有与当前 `octl` 二进制匹配的协议版本常量 `OCTL_PROTOCOL_VERSION`。daemon 启动时会自动把与当前协议一致的插件写入 `~/.config/opencode/plugins/`（内容一致则跳过）；若插件与 daemon 版本不一致，daemon 拒绝订阅并同样自动修复文件，运行中的 opencode 约 1 分钟内热重载新插件并自动重连——升级 octl 只需**替换二进制并重启 daemon**，其余自动。极少数未恢复的情况可重启 opencode 实例或手动运行 `octl install` 对齐。
 
-#### 2. TUI 插件（sidebar 面板）
-
-TUI 插件通过 `~/.config/opencode/tui.json` 注册。编辑该文件，加入 `plugin` 数组：
-
-```json
-{
-  "$schema": "https://opencode.ai/tui.json",
-  "plugin": [
-    "file:///home/<user>/.config/opencode/plugins/octl-sidebar.tsx"
-  ]
-}
-```
-
-- 必须是 `file://` 绝对路径。
-- 修改插件文件或更新分支后，重启 opencode TUI 生效。
-
-> 新版 sidebar 直接订阅 daemon 推送的 `ViewMsg`，不再发送 `request/listSessions`。
+> tui.json 是机器相关的绝对路径（JSON 不展开 `~`），同步 dotfiles 到新机器时旧 `file://` 条目会失效——在新机器重新执行 `octl install` 即可。若想手动注册，`plugin` 数组必须是 `file://` 绝对路径的条目（把 `<user>` 换成你的用户名）：
+>
+> ```json
+> {
+>   "$schema": "https://opencode.ai/tui.json",
+>   "plugin": [
+>     "file:///home/<user>/.config/opencode/plugins/octl-sidebar.tsx"
+>   ]
+> }
+> ```
 
 ### OpenCode Sidebar 集成
 
@@ -446,11 +446,11 @@ daemon 读取 opencode 的 SQLite 数据库，路径：
 # 构建二进制
 go build -o octl .
 
-# 生成 opencode 插件（octl-hook.js + octl-sidebar.tsx）
-octl plugins --output=~/.config/opencode/plugins/
+# 生成 opencode 插件（octl-hook.js + octl-sidebar.tsx）并注册 sidebar
+octl install
 ```
 
-插件生成后会自动注入与当前二进制匹配的协议版本常量；升级 octl 后需要重新生成插件。
+插件生成后会自动注入与当前二进制匹配的协议版本常量；升级 octl 时替换二进制并重启 daemon 即可，daemon 会自动对齐插件文件（见上文「安装 opencode 插件」）。
 
 ## 测试
 
