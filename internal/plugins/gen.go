@@ -74,7 +74,7 @@ func RenderedFiles() []renderedFile {
 
 // writeIfChanged 在磁盘内容与 content 的 md5 不一致时才写盘（临时文件 +
 // rename 原子替换）；文件不存在视为不一致直接写。内容相同时跳过写盘，
-// 避免无谓的 mtime bump 触发 opencode 的插件热重载。
+// 避免无谓的 mtime 变化。
 func writeIfChanged(path, content string) error {
 	b := []byte(content)
 	if existing, err := os.ReadFile(path); err == nil {

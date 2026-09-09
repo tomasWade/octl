@@ -84,10 +84,11 @@ type SidebarProject struct {
 // ---------------------------------------------------------------------------
 
 // VersionMismatchError 是 daemon 拒绝版本不一致的订阅时返回给客户端的错误文案。
-// daemon 在启动时与收到版本不符订阅时会自动把最新插件写入默认插件目录，
-// 运行中的 opencode 约 1 分钟内热重载新插件并自动重连；文案需保留
-// "version mismatch" 子串（TUI app.go 与 sidebar 模板均按该子串匹配）。
-const VersionMismatchError = `octl version mismatch — daemon 已自动更新插件，opencode 约 1 分钟内热重载；未恢复请重启实例或运行 octl install`
+// TUI（app.go）与 sidebar 插件都按此文案匹配「版本不一致」状态，修改时需同步更新。
+// 注意：opencode 对 TUI 插件没有热重载（1.18.30 实测，SIGUSR2/reload 均不重建
+// TUI 插件实例），重启实例是加载新插件的唯一途径；sidebar 收到本错误后停止
+// 重连并弹出「重启」按钮交由用户决策。
+const VersionMismatchError = `octl version mismatch — 插件已更新，请重启 opencode 实例加载（sidebar 可点击「重启」按钮）`
 
 // BaseMsg is used to peek at the message type before full decoding.
 type BaseMsg struct {

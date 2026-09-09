@@ -40,8 +40,7 @@ func TestAlignPlugins_RewritesStale(t *testing.T) {
 	}
 }
 
-// TestAlignPlugins_SkipsMatching 验证内容一致时不重写（无谓 mtime bump 会
-// 触发 opencode 插件热重载）。
+// TestAlignPlugins_SkipsMatching 验证内容一致时不重写（避免无谓 mtime 变化）。
 func TestAlignPlugins_SkipsMatching(t *testing.T) {
 	dir := t.TempDir()
 	old := pluginsDirOverride
@@ -66,7 +65,8 @@ func TestAlignPlugins_SkipsMatching(t *testing.T) {
 }
 
 // TestIntegration_MismatchSubscribeTriggersAlign 验证版本不符的 subscribe
-// 被拒绝的同时触发插件对齐兜底（写盘后仍拒绝，等 opencode 热重载换新）。
+// 被拒绝的同时触发插件对齐兜底（写盘后仍拒绝，旧 sidebar 弹重启按钮由
+// 用户重启加载）。
 // 关键时序：drift 文件必须在 waitForSocket **之后**写入——启动时的
 // alignPlugins 会先把它修好，提前写入就测不到 mismatch 触发路径。
 func TestIntegration_MismatchSubscribeTriggersAlign(t *testing.T) {

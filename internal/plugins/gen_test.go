@@ -102,7 +102,7 @@ func TestGenerateMatchesProtocolMD5(t *testing.T) {
 }
 
 // TestGenerateSkipsUnchangedFiles 验证内容一致时 Generate 不重写文件：
-// 二次生成后 mtime 保持不变（无谓 mtime bump 会触发 opencode 插件热重载）。
+// 二次生成后 mtime 保持不变（避免无谓 mtime 变化）。
 func TestGenerateSkipsUnchangedFiles(t *testing.T) {
 	outDir := t.TempDir()
 	if err := Generate(outDir); err != nil {

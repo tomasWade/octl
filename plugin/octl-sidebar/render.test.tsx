@@ -49,6 +49,8 @@ const noop = () => {};
 const props = {
   connected: true,
   error: "",
+  versionMismatch: false,
+  onRestart: noop,
   favorites: () => ({} as Record<string, boolean>),
   toggleFavorite: noop,
   onConfirmDelete: noop,
@@ -142,5 +144,35 @@ describe("OctlSidebar 渲染（离屏真实渲染）", () => {
     const lines = frameLines(setup.captureCharFrame());
     expect(lines.some((l) => l.includes("BSY 1"))).toBe(true);
     expect(lines.some((l) => l.includes("ASK 1"))).toBe(true);
+  });
+
+  // 版本不一致：弹出「重启」按钮交由用户决策；md5 一致与否以外的离线
+  // （连不上 daemon）只显示 offline 提示，绝不弹按钮。
+  test("versionMismatch 弹重启按钮", async () => {
+    const setup = await testRender(
+      () => (
+        <OctlSidebar projects={[]} connected={false} error="插件与 daemon 版本不一致" versionMismatch={true} onRestart={noop} favorites={() => ({})} toggleFavorite={noop} onConfirmDelete={noop} onFocusSession={noop} />
+      ),
+      { width: WIDTH, height: HEIGHT },
+    );
+    setups.push(setup);
+    await setup.flush();
+    const frame = setup.captureCharFrame();
+    expect(frame).toContain("插件与 daemon 版本不一致");
+    expect(frame).toContain("[⟳ 重启]");
+  });
+
+  test("纯离线（连不上 daemon）不弹重启按钮，显示 offline", async () => {
+    const setup = await testRender(
+      () => (
+        <OctlSidebar projects={[]} connected={false} error="" versionMismatch={false} onRestart={noop} favorites={() => ({})} toggleFavorite={noop} onConfirmDelete={noop} onFocusSession={noop} />
+      ),
+      { width: WIDTH, height: HEIGHT },
+    );
+    setups.push(setup);
+    await setup.flush();
+    const frame = setup.captureCharFrame();
+    expect(frame).toContain("offline");
+    expect(frame).not.toContain("[⟳ 重启]");
   });
 });

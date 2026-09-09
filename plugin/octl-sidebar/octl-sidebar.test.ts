@@ -35,6 +35,8 @@ import {
   toggleStatusFilter,
   filterSessionsKeepingAncestors,
   countStatuses,
+  buildRestartPlan,
+  shellQuote,
 } from "../../internal/plugins/templates/octl-sidebar.tsx";
 
 describe("octl-sidebar helpers", () => {
@@ -63,15 +65,77 @@ describe("octl-sidebar helpers", () => {
     expect(friendlyError("ECONNREFUSED")).toBe("daemon not responding");
     expect(friendlyError("old binary please upgrade")).toBe("old binary please upgrade");
     expect(friendlyError("something else")).toBe("disconnected");
-    const mismatchText = "octl version mismatch — daemon 已自动更新插件，opencode 约 1 分钟内热重载；未恢复请重启实例或运行 octl install";
+    const mismatchText = "octl version mismatch — 插件已更新，请重启 opencode 实例加载（sidebar 可点击「重启」按钮）";
     expect(friendlyError(mismatchText)).toBe(mismatchText);
   });
 
   test("isVersionMismatchError detects protocol drift", () => {
-    expect(isVersionMismatchError("octl version mismatch — daemon 已自动更新插件，opencode 约 1 分钟内热重载")).toBe(true);
+    expect(isVersionMismatchError("octl version mismatch — 插件已更新，请重启 opencode 实例加载")).toBe(true);
     expect(isVersionMismatchError("old binary please upgrade")).toBe(true);
     expect(isVersionMismatchError("some unrelated error")).toBe(false);
     expect(isVersionMismatchError("")).toBe(false);
+  });
+});
+
+describe("buildRestartPlan", () => {
+  test("tmux attached with pane and session: respawn-pane in place", () => {
+    const plan = buildRestartPlan({
+      inTmux: true,
+      tmuxPane: "%40",
+      cwd: "/home/u/proj",
+      sessionId: "ses_abc",
+    });
+    expect(plan.kind).toBe("tmux");
+    expect(plan.argv).toEqual(["respawn-pane", "-k", "-t", "%40", "-c", "/home/u/proj", "opencode -s 'ses_abc'"]);
+  });
+
+  test("tmux attached without session: plain opencode respawn", () => {
+    const plan = buildRestartPlan({
+      inTmux: true,
+      tmuxPane: "%5",
+      cwd: "/tmp",
+      sessionId: null,
+    });
+    expect(plan.kind).toBe("tmux");
+    expect(plan.argv).toEqual(["respawn-pane", "-k", "-t", "%5", "-c", "/tmp", "opencode"]);
+  });
+
+  test("tmux without pane id: respawn current pane", () => {
+    const plan = buildRestartPlan({
+      inTmux: true,
+      tmuxPane: null,
+      cwd: "/tmp",
+      sessionId: null,
+    });
+    expect(plan.kind).toBe("tmux");
+    expect(plan.argv).toEqual(["respawn-pane", "-k", "-c", "/tmp", "opencode"]);
+  });
+
+  test("bare terminal: restore command with sleep-1 lock guard", () => {
+    const plan = buildRestartPlan({
+      inTmux: false,
+      tmuxPane: null,
+      cwd: "/home/u/proj",
+      sessionId: "ses_x",
+    });
+    expect(plan.kind).toBe("bare");
+    expect(plan.argv).toBeNull();
+    expect(plan.restore).toBe("sleep 1 && opencode -s 'ses_x'");
+  });
+
+  test("bare terminal without session: plain restore", () => {
+    const plan = buildRestartPlan({
+      inTmux: false,
+      tmuxPane: null,
+      cwd: "/tmp",
+      sessionId: null,
+    });
+    expect(plan.restore).toBe("sleep 1 && opencode");
+  });
+
+  test("shellQuote escapes embedded single quotes", () => {
+    expect(shellQuote("a'b")).toBe(`'a'\\''b'`);
+    expect(shellQuote("plain")).toBe("'plain'");
   });
 });
 

@@ -286,7 +286,7 @@ octl install
 
 > 插件使用 Bun 运行时（opencode 内置），不依赖任何外部 npm 包。
 
-> 生成的文件头部带有与当前 `octl` 二进制匹配的协议版本常量 `OCTL_PROTOCOL_VERSION`。daemon 启动时会自动把与当前协议一致的插件写入 `~/.config/opencode/plugins/`（内容一致则跳过）；若插件与 daemon 版本不一致，daemon 拒绝订阅并同样自动修复文件，运行中的 opencode 约 1 分钟内热重载新插件并自动重连——升级 octl 只需**替换二进制并重启 daemon**，其余自动。极少数未恢复的情况可重启 opencode 实例或手动运行 `octl install` 对齐。
+> 生成的文件头部带有与当前 `octl` 二进制匹配的协议版本常量 `OCTL_PROTOCOL_VERSION`。daemon 启动时会自动把与当前协议一致的插件写入 `~/.config/opencode/plugins/`（内容一致则跳过）；若插件与 daemon 版本不一致，daemon 拒绝订阅并同样自动修复文件。注意 opencode 对 TUI 插件**没有热重载**（1.18.30 实测）——运行中实例的 sidebar 被拒后会停止重连并弹出「⟳ 重启」按钮，点击即原地重启加载新插件（tmux 内 respawn-pane 原地重生，裸终端经 TIOCSTI 注入恢复命令）。升级 octl 仍是**替换二进制并重启 daemon**，新实例自动用新插件。
 
 > tui.json 是机器相关的绝对路径（JSON 不展开 `~`），同步 dotfiles 到新机器时旧 `file://` 条目会失效——在新机器重新执行 `octl install` 即可。若想手动注册，`plugin` 数组必须是 `file://` 绝对路径的条目（把 `<user>` 换成你的用户名）：
 >

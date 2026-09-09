@@ -198,7 +198,7 @@ octl install
 
 该命令生成 `octl-hook.js` 和 `octl-sidebar.tsx` 两个文件到 `~/.config/opencode/plugins/`（`--output=<dir>` 可指定其他目录），注入与当前 `octl` 二进制匹配的协议版本常量，并把 sidebar 以 `file://` 绝对路径条目追加进 `~/.config/opencode/tui.json` 的 `plugin` 数组（只追加不替换：已含精确条目一字节不动、异路径条目不碰、JSON 损坏报错不覆盖）。
 
-daemon 启动时还会自动把内嵌模板渲染结果与 `~/.config/opencode/plugins/` 的两个文件做 md5 比对、有差异才写（升级流程收敛为「替换二进制 + 重启 daemon」：新启动的 opencode 直接用新插件，运行中的实例约 1 分钟内热重载自动重连；daemon 收到版本不符的 subscribe 时同样触发该对齐兜底）。
+daemon 启动时还会自动把内嵌模板渲染结果与 `~/.config/opencode/plugins/` 的两个文件做 md5 比对、有差异才写（升级流程收敛为「替换二进制 + 重启 daemon」：新启动的 opencode 直接用新插件；运行中实例的 sidebar 被版本拒绝后弹出「⟳ 重启」按钮，点击即原地重启加载新插件——opencode 对 TUI 插件**无热重载**，1.18.30 实测，重启是唯一加载途径；daemon 收到版本不符的 subscribe 时同样触发该对齐兜底）。
 
 每个 opencode 实例启动时会自动加载 `octl-hook.js`，过滤 11 类目标事件并转发到 daemon（事件 properties 附带 `pid` / `tmuxPane` / `tmuxSession` 附着信息，供 daemon 维护 session→pid→tmux pane 映射并在连接断开时清理）；插件自带 500 条 FIFO 缓冲和断线 2 秒重连。
 
@@ -209,6 +209,8 @@ sidebar 插件由 `octl install` 自动以 `file://` 绝对路径条目注册进
 **删除（X 按钮）**：session 行尾 `★` 之后为 ↗ 跳转按钮、再后为 X 删除按钮（`#f7768e` 红色独立 text，左键触发），project 标题行尾同样有 X——global project（哨兵值小写 `"global"`，`isGlobalProject` 防御性规范化比较，移除空白/零宽字符后小写匹配）不显示 X、不可删除。点击 X 打开 Portal 确认浮层（全屏遮罩 `stopPropagation` 阻止事件穿透，点击遮罩或 `[取消]` 关闭，`[确认删除]` 左键触发执行；提示文案含目标计数，如 `删除该 session 及其全部子 session？（共 N 个）`）。确认后经 `executeDelete` 执行：session 用 `collectDescendantIDs` 显式栈 DFS 收集自身+全部后代 sessionId（visited 防循环引用），project 用 `collectProjectSessionIDs` 先按 sessionId 去重再重建树收集全部 session 并附带 `projectId`（`confirmDeleteAction` 纯函数计算参数，global project 返回 null 不可删）；`sendAction` 扩展支持可选 `projectId` 字段（`buildActionPayload`），发送 `delete` action 后乐观清理本地 favorites（`removeIdsFromMap` 不可变删除，不等 daemon push）。daemon 的 `result` 消息携带执行结果——失败显示可见错误（`操作失败: ...`）、成功清除错误；`progress` 消息仅记录日志。
 
 **tmux 跳转（↗ 按钮）**：session 行尾 `★` 与 X 之间为 ↗ 跳转按钮（`#7aa2f7` 蓝色独立 text，左键触发、stopPropagation 防冒泡到展开），收藏 tab 条目行尾同样有 ↗。`ViewSession` 的 `pid`/`tmuxPane`/`tmuxSession` 由 daemon 的 `sessionProcess` 映射注入（hook 事件上报、event-source 断连时按 pid 清理）。点击经 `focusSession` 执行，按点击源是否在 tmux 内（`process.env.TMUX`）分两路：**在 tmux 内**——已附着（pane 与 session 均已知）→ `switch-client`（切 tmux session）+ `select-window`（切到 pane 所在 window，pane id 可直接作 window 目标）+ `select-pane`（激活 pane）三连跳转（**tmuxSession 形如 `$29`，命令中必须单引号包裹**，否则 `$29` 被 sh 展开为位置参数导致 `can't find session: 9`）；未附着 → `makeTmuxSessionName`（title 清理特殊字符保留字母数字与中文、截 15 字，空回退 sessionId/unknown）命名，`tmux has-session` 已存在直接切换，否则 `tmux new-session -d -s <name> -c <directory>` 后以 TUI 模式 `opencode --session <id>` 打开再切换（**不可用 `opencode run --session`**——run 缺 message 会报错退出导致 tmux session 秒死）。**不在 tmux 内**——switch/select 类命令需要 tmux 客户端上下文（执行只会报 `no current client`），故跳过全部切换命令：attached 目标直接提示"目标正在 tmux <session> 的 pane <pane> 运行，无法自动跳转"；未附着目标照常创建/复用 tmux session（`focusSession` 的 `autoSwitch:false` 选项），顶部状态行提示"已创建/复用 tmux session「<name>」，请手动切换"。跳转结果与失败统一走顶部状态行（`error` signal，与 offline/操作失败同通道同位置）；view 消息不清除 error（推送高频会秒冲提示），清除点只有 connect 成功与 result 成功。命令执行器可注入（`CommandRunner`），便于单测验证命令序列。
+
+**版本不一致重启按钮**：daemon 拒绝协议 md5 不符的 subscribe 后，sidebar 停止重连（重连只会再次被拒）并弹出「⟳ 重启」按钮（`versionMismatch` signal，黄色 `#e0af68`，左键触发）交由用户决策——**仅 md5 不一致时弹出，连不上 daemon（离线）只显示 offline 提示不弹按钮**。点击经 `requestRestart` 执行 `buildRestartPlan`（纯函数，配方与 restart.tsx 一致）：tmux 内 `respawn-pane -k -t <pane> -c <cwd> "opencode -s '<sid>'"` 原地重生（3s 兜底 process.exit）；裸终端把 `sleep 1 && opencode [-s sid]` 写入 history、onDispose 时机 TIOCSTI 注入 tty 输入队列（EPERM 降级为 stdout 提示）后 `dispatchCommand("app.exit")` 优雅退出；sessionId 取自 `api.route.current`。opencode 对 TUI 插件无热重载（1.18.30 实测，SIGUSR2/reload 只 dispose project 实例、不重建 TUI 插件），重启实例是加载新插件的唯一途径。
 
 ## 测试
 
@@ -265,7 +267,7 @@ go test -run TestRealDBSchema
 - `internal/tui`（nav_test.go 之 TestReconnectDelayCurve）：重连退避曲线（250ms/500ms/1s/2s/5s 封顶/负数钳制）。
 - `internal/tui`（nav_test.go）：ViewType 枚举与 NavItems 三视图顺序、数字键 1/2/3 切换、Tab/Shift+Tab 循环、app 层 `FavoritesToggleRequestMsg`/`FavoritesRemoveRequestMsg` 的 toggle 语义（对已收藏发 `unfavorite`、未收藏发 `favorite` action + 乐观更新）、`daemonViewMsg` 以 `ViewMsg.Favorites` 重建 `favoritesMap`（daemon 权威源，陈旧本地项丢弃）并广播 `FavoritesChangedMsg`。
 - `internal/tui/views`（favorites_test.go）：`rebuildFavoriteIDs` 排序（按 ViewMsg 出现顺序 + 补全未出现 ID）、光标 clamp、Space 多选、f 取消收藏（多选/单条，发 `FavoritesRemoveRequestMsg`）、d 删除（delete action + 收藏移除的 `tea.Sequence`）、滚动窗口、空态提示、状态色映射。
-- `plugin`：事件过滤、buffer FIFO、sidebar helper 函数（含 project/session 折叠、`buildSessionTree` 树重建、`normalizeProject` 字段透传（含 pid/tmux）、`tabTitleFg`/`switchTab` tab 高亮与切换、状态 chip 过滤纯函数（`STATUS_CHIPS` 定义/`visibleChips` 非零筛选/`filterActive`/`sessionMatchesFilter`/`favoriteMatchesFilter` 收藏条目过滤（叶子自身 status、父条目 rowStatus 聚合）/`toggleStatusFilter`/`filterSessionsKeepingAncestors` 剪枝保形含祖先链保留/环/悬空 parentId/顺序保持/`countStatuses` 只计自身 status）、`favoritesEmptyHint` 收藏空态提示、`toggleFavoriteImpl` 收藏切换不可变性、`sessionRowColor` 状态点着色、删除相关纯函数 `isGlobalProject`/`buildActionPayload`/`collectDescendantIDs`/`collectProjectSessionIDs`/`confirmDeleteAction`/`removeIdsFromMap`、tmux 跳转 `makeTmuxSessionName`/`focusSession`（注入 runner 验证命令序列）、hook 事件 payload 携带 pid/tmux 字段、`ViewMsg.Favorites` 同步本地 signal 与 isFavorite 兜底）、ViewMsg 解析。
+- `plugin`：事件过滤、buffer FIFO、sidebar helper 函数（含 project/session 折叠、`buildSessionTree` 树重建、`normalizeProject` 字段透传（含 pid/tmux）、`tabTitleFg`/`switchTab` tab 高亮与切换、状态 chip 过滤纯函数（`STATUS_CHIPS` 定义/`visibleChips` 非零筛选/`filterActive`/`sessionMatchesFilter`/`favoriteMatchesFilter` 收藏条目过滤（叶子自身 status、父条目 rowStatus 聚合）/`toggleStatusFilter`/`filterSessionsKeepingAncestors` 剪枝保形含祖先链保留/环/悬空 parentId/顺序保持/`countStatuses` 只计自身 status）、`favoritesEmptyHint` 收藏空态提示、`toggleFavoriteImpl` 收藏切换不可变性、`sessionRowColor` 状态点着色、删除相关纯函数 `isGlobalProject`/`buildActionPayload`/`collectDescendantIDs`/`collectProjectSessionIDs`/`confirmDeleteAction`/`removeIdsFromMap`、tmux 跳转 `makeTmuxSessionName`/`focusSession`（注入 runner 验证命令序列）、hook 事件 payload 携带 pid/tmux 字段、`ViewMsg.Favorites` 同步本地 signal 与 isFavorite 兜底、版本不一致 `buildRestartPlan` 重启计划（tmux respawn-pane argv/裸终端 TIOCSTI 恢复命令/sessionId 单引号转义/无 sid 退化））、ViewMsg 解析。
 
 ## 代码风格与约定
 
@@ -486,7 +488,7 @@ action 执行完成后，daemon 会重新 `buildView()` 并 `pushView()`，所�
 - 发版流水线（`.github/workflows/release.yml`）：tag（`v*`）推送触发，交叉编译四平台二进制并自动创建 GitHub Release（附件 tar.gz + 自动生成 release notes）。
 - 构建产物为单个静态二进制文件 `octl`（CGO-free）。
 - daemon 设计为前台运行，由外部 supervisor/systemd 管理；systemd 用户服务示例见 `scripts/octl.service`（README 的「让 daemon 常驻 / Keeping the daemon running」章节有其用法，`RestartSec=1`）。
-- sidebar 插件和 hook 插件由 `octl install` 生成并注册，daemon 启动时自动对齐插件文件——升级流程为「替换二进制 + 重启 daemon」，其余自动（运行中的 opencode 实例约 1 分钟内热重载）。
+- sidebar 插件和 hook 插件由 `octl install` 生成并注册，daemon 启动时自动对齐插件文件——升级流程为「替换二进制 + 重启 daemon」；运行中实例的 sidebar 被版本拒绝后弹出「⟳ 重启」按钮由用户点击重启（opencode 对 TUI 插件无热重载，1.18.30 实测）。
 
 ### 交付闭环（强制）
 

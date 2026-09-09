@@ -4,7 +4,7 @@ const OCTL_PROTOCOL_VERSION = "{{OCTL_MD5}}";
 
 import { appendFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { exec } from "node:child_process";
+import { exec, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import { createConnection, type Socket } from "node:net";
 import { createSignal, createMemo, onCleanup, Show } from "solid-js";
@@ -63,10 +63,37 @@ export function friendlyError(err: string): string {
 }
 
 // 纯函数：判断 daemon 返回的错误是否为协议版本不一致（version mismatch / old binary）。
-// sidebar 以此识别「插件与 daemon 版本漂移」的场景：停止 2s 盲重连，改挂 60s
-// 慢速重试保险网（daemon 会自动修复插件文件，等 opencode 热重载换新实例）。
+// sidebar 以此识别「插件与 daemon 版本漂移」的场景：停止 2s 盲重连（重连只会
+// 再次被拒），弹出「重启加载新插件」按钮交由用户决策——opencode 对 TUI 插件
+// 没有热重载（1.18.30 实测，SIGUSR2/reload 不重建 TUI 插件），重启实例是
+// 加载新插件的唯一途径。daemon 离线（连不上）不走此分支，保持 offline 提示。
 export function isVersionMismatchError(err: string): boolean {
   return err.includes("version mismatch") || err.includes("old binary");
+}
+
+// 单引号 shell 包裹（含内部单引号转义），与 restart.tsx 的 shq 一致。
+export function shellQuote(s: string): string {
+  return `'${String(s).replace(/'/g, `'\\''`)}'`;
+}
+
+// 纯函数：构造实例重启计划。tmux 内 → respawn-pane 原地重生（argv 交给执行方
+// spawn）；裸终端 → 生成待注入 tty 输入队列的恢复命令（TIOCSTI 由执行方完成，
+// sleep 1 规避新旧实例的锁冲突）。配方与 ~/.config/opencode/plugins/restart.tsx
+// （玄武经验库）保持一致。
+export function buildRestartPlan(opts: {
+  inTmux: boolean;
+  tmuxPane: string | null;
+  cwd: string;
+  sessionId: string | null;
+}): { kind: "tmux" | "bare"; argv: string[] | null; restore: string } {
+  if (opts.inTmux) {
+    const argv = ["respawn-pane", "-k"];
+    if (opts.tmuxPane) argv.push("-t", opts.tmuxPane);
+    argv.push("-c", opts.cwd, opts.sessionId ? `opencode -s ${shellQuote(opts.sessionId)}` : "opencode");
+    return { kind: "tmux", argv, restore: "" };
+  }
+  const resume = opts.sessionId ? ` -s ${shellQuote(opts.sessionId)}` : "";
+  return { kind: "bare", argv: null, restore: `sleep 1 && opencode${resume}` };
 }
 
 // 纯函数：返回指定 tab 的标题前景色。activeTab 为当前选中 tab，tab 为被查询的 tab。
@@ -812,6 +839,8 @@ export function OctlSidebar(props: {
   projects: SidebarProject[];
   connected: boolean;
   error: string;
+  versionMismatch: boolean;
+  onRestart: () => void;
   favorites: () => Record<string, boolean>;
   toggleFavorite: (sessionId: string) => void;
   onConfirmDelete: (node: SessionTreeNode | SidebarProject) => void;
@@ -916,7 +945,20 @@ export function OctlSidebar(props: {
       {/* 注意 error 用三元而非 &&：error 为空串时 && 会把 "" 渲染成孤儿文本
           节点（dev 编译模式直接抛 Orphan text error），三元显式返回 null 更稳。 */}
       {props.error ? <text fg="#a9b1d6">{friendlyError(props.error)}</text> : null}
-      {!props.connected && !props.error && (
+      {/* 协议版本不一致：弹重启按钮交由用户决策（点一下才重启）。仅 md5 不一致
+          时出现；连不上 daemon（离线）只显示 offline 提示，不弹按钮。 */}
+      {props.versionMismatch ? (
+        <box flexDirection="row">
+          <text fg="#e0af68">插件与 daemon 版本不一致，重启后加载新插件 </text>
+          <text
+            fg="#e0af68"
+            onMouseDown={(e) => handleMouseDown(e, props.onRestart)}
+          >
+            [⟳ 重启]
+          </text>
+        </box>
+      ) : null}
+      {!props.connected && !props.error && !props.versionMismatch && (
         <text fg="#a9b1d6">offline</text>
       )}
       {props.connected && props.projects.length === 0 && activeTab() === "all" && (
@@ -1097,9 +1139,6 @@ export default {
     let socket: Socket | null = null;
     let disposed = false;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
-    // 版本不一致后的 60s 慢速重试保险网（正常路径是 daemon 修复文件 → opencode
-    // 热重载换新实例；本 timer 只兜底热重载失效的极端场景）。
-    let slowRetryTimer: ReturnType<typeof setTimeout> | null = null;
     let readBuf = "";
 
     function scheduleRetry() {
@@ -1110,25 +1149,10 @@ export default {
       }, 2000);
     }
 
-    // 60s 慢速重试：触发前重置 versionMismatch，让重连走完整流程（若 daemon
-    // 侧已对齐，会正常收到 subscribed 并恢复）。
-    function scheduleSlowRetry() {
-      if (disposed || slowRetryTimer) return;
-      slowRetryTimer = setTimeout(() => {
-        slowRetryTimer = null;
-        setVersionMismatch(false);
-        connect();
-      }, 60000);
-    }
-
     function clearRetry() {
       if (retryTimer) {
         clearTimeout(retryTimer);
         retryTimer = null;
-      }
-      if (slowRetryTimer) {
-        clearTimeout(slowRetryTimer);
-        slowRetryTimer = null;
       }
     }
 
@@ -1204,15 +1228,14 @@ export default {
         if (msg.type === "response" && msg.ok === false) {
           const err = String(msg.error || "unknown error");
           if (isVersionMismatchError(err)) {
-            // 版本不一致：显示明确错误并停止 2s 盲重连（重连只会再次被拒，
-            // 刷屏日志）；改挂 60s 慢速重试保险网——正常情况下 daemon 已自动
-            // 修复插件文件、opencode 约 1 分钟内热重载换新实例，本 timer 只
-            // 兜底热重载失效的极端场景。
+            // 版本不一致（协议 md5 不同）：停止重连（重连只会再次被拒，刷屏
+            // 日志），弹出「重启」按钮交由用户决策——opencode 对 TUI 插件
+            // 没有热重载（1.18.30 实测），重启实例是加载新插件的唯一途径。
+            // daemon 离线（连不上）不在此分支，保持 2s 重试与 offline 提示。
             setVersionMismatch(true);
             setConnected(false);
-            setError("插件与 daemon 版本不一致：daemon 已自动更新插件文件，opencode 约 1 分钟内热重载；未恢复请重启 opencode 或运行 octl install");
+            setError("插件与 daemon 版本不一致");
             log("version mismatch from daemon: " + err);
-            scheduleSlowRetry();
             if (socket) {
               try {
                 socket.end();
@@ -1360,6 +1383,83 @@ export default {
         });
     }
 
+    // 用户点击「重启」：原地重启 opencode 实例以加载磁盘上的新插件。
+    // tmux 内 respawn-pane 原地重生；裸终端经 TIOCSTI 注入恢复命令后优雅
+    // 退出（注入必须等 TUI 停读 stdin 的 onDispose 时机，否则字符被 TUI
+    // 当按键吃掉）。配方与 restart.tsx（玄武经验库）保持一致。
+    let restartRequested = false;
+    function requestRestart() {
+      if (restartRequested) return;
+      restartRequested = true;
+      let sessionId: string | null = null;
+      try {
+        const r = api.route?.current;
+        if (r && r.name === "session" && r.params?.sessionID) sessionId = String(r.params.sessionID);
+      } catch {}
+      const plan = buildRestartPlan({
+        inTmux: !!process.env.TMUX,
+        tmuxPane: process.env.TMUX_PANE ?? null,
+        cwd: process.cwd(),
+        sessionId,
+      });
+      log("restart requested: kind=" + plan.kind + " argv=" + (plan.argv ? plan.argv.join(" ") : "") + " restore=" + plan.restore);
+      if (plan.kind === "tmux" && plan.argv) {
+        try {
+          // spawn 的失败（tmux 不存在/不可达等）走异步 error 事件而非同步
+          // throw：收到 error 时取消 3s 兜底退出，留在原实例并把失败显示到
+          // 状态行；正常路径 respawn-pane -k 会杀掉本进程。
+          const bail = setTimeout(() => process.exit(0), 3000);
+          const child = spawn("tmux", plan.argv, { stdio: "ignore", detached: true });
+          child.on("error", (e: Error) => {
+            clearTimeout(bail);
+            restartRequested = false;
+            setError("重启失败: " + (e?.message || String(e)));
+          });
+          child.unref();
+        } catch (e: any) {
+          restartRequested = false;
+          setError("重启失败: " + (e?.message || String(e)));
+        }
+        return;
+      }
+      // 裸终端：恢复命令进 history + onDispose 时 TIOCSTI 注入 + 优雅退出
+      try {
+        const histFile = process.env.HISTFILE || `${process.env.HOME}/.zsh_history`;
+        appendFileSync(histFile, `${plan.restore}\n`);
+      } catch {}
+      let injected = false;
+      const inject = () => {
+        if (injected) return;
+        injected = true;
+        try {
+          // @ts-ignore bun:ffi
+          const { dlopen } = require("bun:ffi");
+          const libc = dlopen("libc.so.6", { ioctl: { args: ["i32", "i64", "ptr"], returns: "i32" } });
+          const TIOCSTI = 0x5412;
+          let ok = 0;
+          for (const ch of plan.restore + "\n") {
+            const buf = new Uint8Array([ch.charCodeAt(0)]);
+            if (libc.symbols.ioctl(0, TIOCSTI, buf) === 0) ok++;
+          }
+          log(`tiocsti injected ${ok}/${plan.restore.length + 1} chars`);
+        } catch (e: any) {
+          // TIOCSTI 被 sysctl 禁用等场景：stdout 提示手动恢复
+          log("tiocsti failed: " + (e?.message || String(e)));
+          process.stdout.write(`\r\n\x1b[1;33m⚡ octl: press ↑ then Enter to resume (${plan.restore})\x1b[0m\r\n`);
+        }
+      };
+      try {
+        api.lifecycle?.onDispose?.(inject);
+      } catch {}
+      process.on("exit", () => inject());
+      try {
+        api.keymap?.dispatchCommand?.("app.exit");
+      } catch (e: any) {
+        log("app.exit dispatch failed: " + (e?.message || String(e)));
+      }
+      setTimeout(() => process.exit(0), 3000);
+    }
+
     api.slots.register({
       slots: {
         sidebar_content: () => (
@@ -1367,6 +1467,8 @@ export default {
             projects={projects()}
             connected={connected()}
             error={error()}
+            versionMismatch={versionMismatch()}
+            onRestart={requestRestart}
             favorites={favorites}
             toggleFavorite={toggleFavoriteAction}
             onConfirmDelete={executeDelete}

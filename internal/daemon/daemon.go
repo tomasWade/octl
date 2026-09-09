@@ -177,8 +177,9 @@ var pluginsDirOverride string
 // alignPlugins 把内嵌模板的渲染结果写入默认插件目录
 // （~/.config/opencode/plugins/），md5 不一致才写。两个触发点：daemon 启动
 // 时、收到版本不符的 subscribe 时。由此升级流程收敛为「替换二进制 + 重启
-// daemon」：磁盘立即对齐，新启动的 opencode 直接用新插件；运行中的实例靠
-// opencode 的内容热重载（约 1 分钟）换新并自动重连。失败只记日志不阻塞。
+// daemon」：磁盘立即对齐，新启动的 opencode 直接用新插件；运行中实例的
+// sidebar 被拒后弹出「重启」按钮，由用户点击原地重启加载新插件（opencode
+// 对 TUI 插件无热重载，1.18.30 实测）。失败只记日志不阻塞。
 func alignPlugins() {
 	alignPluginsMu.Lock()
 	defer alignPluginsMu.Unlock()
@@ -367,7 +368,8 @@ func (sm *StateManager) handleConn(conn net.Conn) {
 
 			// 版本比对：客户端必须携带与当前协议一致的 Version，否则拒绝订阅。
 			// 拒绝前触发插件对齐兜底（防文件被手改/删除导致的漂移）：写盘后仍
-			// 拒绝本次订阅——旧代码客户端需等 opencode 热重载换新后自行重连。
+			// 拒绝本次订阅——旧代码客户端停止重连并在 sidebar 弹出「重启」
+			// 按钮，由用户决定何时原地重启加载新插件。
 			if msg.Version != plugins.ProtocolMD5() {
 				log.Printf("[daemon] subscribe version mismatch: client=%s got=%s want=%s", conn.RemoteAddr(), msg.Version, plugins.ProtocolMD5())
 				alignPlugins()
