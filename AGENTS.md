@@ -244,7 +244,7 @@ go test -run TestRealDBSchema
 ### 测试覆盖要点
 
 - `internal/db`：查询正确性、NULL 列的 COALESCE 处理。
-- `internal/manage`：导出/创建/fork/发送 JSON 结构、批量操作 Summary、project 删除保护。
+- `internal/manage`：导出/创建/fork/发送 JSON 结构、批量操作 Summary、project 删除保护、`DeleteSession` 幂等语义（`isSessionNotFound` 判定：CLI 输出含 "Session not found"（小写匹配，免疫 ANSI 色码）视为幂等成功并照常清理 session_diff；二进制缺失/其他错误照报；桩注入 `runCombined` 消环境依赖；级联回归测试：父删成功+子删 not-found → `Succeeded=2 Failed=0`）。
 - `internal/daemon`：11 类事件处理、`deriveFromDB`、DB 同步规则、空 sessionID 忽略、并发安全、`buildView` 聚合、`ViewMsg` 广播、action 分发、message request 响应；收藏（favorites_test.go / buildview_favorites_test.go / prune_test.go）：`favorite`/`unfavorite` action 幂等批量处理、`buildView` 注入 `IsFavorite` 并按插入顺序组装 `Favorites`（孤儿收藏跳过）、删除联动剪枝三路径（`handleDeleteAction` / `session.deleted` 事件 / `syncFromDB` tombstone 扫描）。
 - `internal/tui/views`：从 `ViewMsg` 构建树、展开状态保持、光标恢复、状态颜色/图标映射、action 请求发送、progress/result 处理、Space 多选/批量删除、滚动条窗口渲染与 clamp。
 - `internal/daemon`（query_test.go）：`QueryOnce` 三方法 happy path、未知 session 返回空消息、daemon 未运行（`ErrDaemonConnect`）、静默连接超时（`ErrQueryTimeout`）。

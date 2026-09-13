@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/tomasWade/octl/internal/db"
 	"github.com/tomasWade/octl/internal/types"
@@ -51,6 +52,10 @@ type exportData struct {
 type Manager struct {
 	db      *db.DB
 	homeDir string
+
+	// runCombined 执行外部命令并返回合并输出（可注入测试桩；
+	// nil 时使用真实的 cmd.CombinedOutput）。
+	runCombined func(cmd *exec.Cmd) ([]byte, error)
 }
 
 // New 使用给定的数据库连接创建一个新的 Manager。
@@ -64,6 +69,21 @@ func New(database *db.DB) *Manager {
 		db:      database,
 		homeDir: homeDir,
 	}
+}
+
+// runCombinedOutput 执行外部命令并返回合并输出；测试可注入 runCombined 桩。
+func (m *Manager) runCombinedOutput(cmd *exec.Cmd) ([]byte, error) {
+	if m.runCombined != nil {
+		return m.runCombined(cmd)
+	}
+	return cmd.CombinedOutput()
+}
+
+// isSessionNotFound 判断 opencode CLI 的输出是否表示目标 session 不存在。
+// CLI 报错形如 "Error: Session not found: <id>"（"Error:" 前缀带 ANSI 色码，
+// "Session not found" 本体是连续明文），统一转小写做子串匹配。
+func isSessionNotFound(out []byte) bool {
+	return strings.Contains(strings.ToLower(string(out)), "session not found")
 }
 
 // setCmdDir 设置 cmd 的工作目录。如果 directory 不存在或不可用，
@@ -136,7 +156,12 @@ func (m *Manager) DeleteProject(projectID string) error {
 // 但目录不存在时也会回退到 /tmp 执行。
 // 成功后还会清理 session_diff 存储目录。
 //
-// 如果 CLI 命令失败，返回的错误会包含命令的组合输出以用于诊断。
+// 幂等语义：opencode 自身的 delete 会级联删除子 session，批量删除场景下
+// 轮到已被级联删掉的子 session 时 CLI 返回 "Session not found"（非零退出）。
+// 目标已不存在即删除目标已达成，此时视为成功返回 nil（2026-09-13 级联误报
+// 修复：此前该情形被记为 Failed 导致整批 exit 1，调用方误判删除失败）。
+//
+// 除 not-found 外的 CLI 失败仍返回错误，内容包含命令的组合输出以用于诊断。
 func (m *Manager) DeleteSession(s types.Session) error {
 	cmd := exec.Command("opencode", "session", "delete", s.ID)
 
@@ -150,8 +175,8 @@ func (m *Manager) DeleteSession(s types.Session) error {
 		}
 	}
 
-	out, err := cmd.CombinedOutput()
-	if err != nil {
+	out, err := m.runCombinedOutput(cmd)
+	if err != nil && !isSessionNotFound(out) {
 		return fmt.Errorf("delete session %s: %w\noutput: %s", s.ID, err, string(out))
 	}
 

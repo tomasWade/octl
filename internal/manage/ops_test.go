@@ -3,7 +3,9 @@ package manage
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -13,6 +15,16 @@ import (
 	"github.com/tomasWade/octl/internal/db"
 	"github.com/tomasWade/octl/internal/types"
 )
+
+// opencodeNotFoundErr 构造 opencode 二进制不可用的确定性错误
+// （模拟 CI 上无 opencode 的环境；本机装有 opencode 时也行为一致）。
+func opencodeNotFoundErr() error {
+	return &exec.Error{Name: "opencode", Err: exec.ErrNotFound}
+}
+
+// notFoundOutput 是 opencode CLI 对不存在 session 的真实报错形态
+// （"Error:" 前缀带 ANSI 色码，2026-09-13 实测捕获）。
+const notFoundOutput = "\x1b[91m\x1b[1mError: \x1b[0mSession not found: ses-gone"
 
 // setupTestDB creates a temporary database with test schema and data for manage tests.
 func setupTestDB(t *testing.T) (*db.DB, string) {
@@ -390,6 +402,12 @@ func TestBatchDelete_Single(t *testing.T) {
 	defer d.Close()
 
 	m := New(d)
+	// 注入桩消除环境差异：本机装有 opencode 时，"Session not found" 已被
+	// 幂等化为成功（见 TestDeleteSession_NotFound_IdempotentSuccess），
+	// 本用例验证的是"CLI 真正不可用"这条失败路径。
+	m.runCombined = func(cmd *exec.Cmd) ([]byte, error) {
+		return nil, opencodeNotFoundErr()
+	}
 
 	sessions := []types.Session{
 		{ID: "sess-fail-1", Directory: "/tmp"},
@@ -429,6 +447,10 @@ func TestBatchDelete_Multiple(t *testing.T) {
 	defer d.Close()
 
 	m := New(d)
+	// 桩注入理由同 TestBatchDelete_Single。
+	m.runCombined = func(cmd *exec.Cmd) ([]byte, error) {
+		return nil, opencodeNotFoundErr()
+	}
 
 	sessions := []types.Session{
 		{ID: "sess-fail-1", Directory: "/tmp"},
@@ -731,6 +753,11 @@ func TestSummary_AllFailed(t *testing.T) {
 	defer d.Close()
 
 	m := New(d)
+	// 桩注入理由同 TestBatchDelete_Single。
+	m.runCombined = func(cmd *exec.Cmd) ([]byte, error) {
+		return nil, opencodeNotFoundErr()
+	}
+
 	sessions := []types.Session{
 		{ID: "fail-1", Directory: "/tmp"},
 		{ID: "fail-2", Directory: "/tmp"},
@@ -759,6 +786,134 @@ func TestSummary_AllFailed(t *testing.T) {
 		}
 		if r.Success {
 			t.Errorf("Results[%d] should have Success = false", i)
+		}
+	}
+}
+
+// TestIsSessionNotFound 表驱动验证 not-found 判定：覆盖 opencode CLI 的
+// 真实 ANSI 色码输出、大小写变体、无关错误与空输出（二进制缺失）。
+func TestIsSessionNotFound(t *testing.T) {
+	tests := []struct {
+		name string
+		out  []byte
+		want bool
+	}{
+		{name: "real ansi-wrapped output", out: []byte(notFoundOutput), want: true},
+		{name: "plain lowercase", out: []byte("session not found: ses_x"), want: true},
+		{name: "uppercase", out: []byte("SESSION NOT FOUND: ses_x"), want: true},
+		{name: "not the exact phrase", out: []byte("session was not found"), want: false},
+		{name: "unrelated error", out: []byte("Error: invalid session id format"), want: false},
+		{name: "empty output (binary missing)", out: nil, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isSessionNotFound(tt.out); got != tt.want {
+				t.Errorf("isSessionNotFound(%q) = %v, want %v", tt.out, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestDeleteSession_NotFound_IdempotentSuccess 幂等语义：CLI 报
+// "Session not found"（非零退出）时，删除目标已达成，DeleteSession 应返回
+// nil，且仍执行 session_diff 尽力清理。这是 2026-09-13 级联误报事故的
+// 核心行为修复。
+func TestDeleteSession_NotFound_IdempotentSuccess(t *testing.T) {
+	homeDir := t.TempDir()
+	m := New(nil)
+	m.homeDir = homeDir
+	m.runCombined = func(cmd *exec.Cmd) ([]byte, error) {
+		// 同时锁定 CLI 调用形状，防止修复波及命令本身。
+		wantArgs := []string{"opencode", "session", "delete", "sess-gone"}
+		if strings.Join(cmd.Args, " ") != strings.Join(wantArgs, " ") {
+			t.Errorf("cmd.Args = %v, want %v", cmd.Args, wantArgs)
+		}
+		return []byte(notFoundOutput), errors.New("exit status 1")
+	}
+
+	// 预置 session_diff 目录，验证幂等成功路径仍会清理。
+	diffDir := filepath.Join(homeDir, ".local", "share", "opencode", "storage", "session_diff", "sess-gone")
+	if err := os.MkdirAll(diffDir, 0755); err != nil {
+		t.Fatalf("MkdirAll(diffDir) error = %v", err)
+	}
+
+	err := m.DeleteSession(types.Session{ID: "sess-gone", Directory: "/tmp"})
+	if err != nil {
+		t.Fatalf("DeleteSession() should treat not-found as idempotent success, got error: %v", err)
+	}
+	if _, err := os.Stat(diffDir); !os.IsNotExist(err) {
+		t.Error("session_diff dir should be removed on the idempotent success path")
+	}
+}
+
+// TestDeleteSession_GenuineFailureStillFails 非 not-found 的 CLI 失败必须
+// 照常返回错误（错误信息含 session ID 与命令输出，保证可诊断）。
+func TestDeleteSession_GenuineFailureStillFails(t *testing.T) {
+	m := New(nil)
+	m.homeDir = t.TempDir()
+	m.runCombined = func(cmd *exec.Cmd) ([]byte, error) {
+		return []byte("Error: database is locked"), errors.New("exit status 1")
+	}
+
+	err := m.DeleteSession(types.Session{ID: "sess-x", Directory: "/tmp"})
+	if err == nil {
+		t.Fatal("DeleteSession() expected error for genuine CLI failure, got nil")
+	}
+	if !strings.Contains(err.Error(), "delete session sess-x") {
+		t.Errorf("error = %q, want containing %q", err.Error(), "delete session sess-x")
+	}
+	if !strings.Contains(err.Error(), "database is locked") {
+		t.Errorf("error = %q, want containing CLI output %q", err.Error(), "database is locked")
+	}
+}
+
+// TestDeleteSession_BinaryMissingStillFails 二进制缺失时输出为空、不含
+// not-found 字样，必须仍判为失败——防止幂等匹配过宽吞掉真实故障。
+func TestDeleteSession_BinaryMissingStillFails(t *testing.T) {
+	m := New(nil)
+	m.homeDir = t.TempDir()
+	m.runCombined = func(cmd *exec.Cmd) ([]byte, error) {
+		return nil, opencodeNotFoundErr()
+	}
+
+	if err := m.DeleteSession(types.Session{ID: "sess-x", Directory: "/tmp"}); err == nil {
+		t.Fatal("DeleteSession() expected error when opencode binary is missing, got nil")
+	}
+}
+
+// TestBatchDelete_CascadeNotFound_IdempotentSuccess 事故回归测试
+// （2026-09-13 /finish）：级联删除树时 opencode 自身会级联删掉子 session，
+// 轮到子 session 时 CLI 返回 "Session not found"。修复前 batchExec 记
+// Failed=1 导致整批 exit 1；修复后父删成功 + 子删 not-found 应合计
+// Succeeded=2、Failed=0。
+func TestBatchDelete_CascadeNotFound_IdempotentSuccess(t *testing.T) {
+	m := New(nil)
+	m.homeDir = t.TempDir()
+	calls := 0
+	m.runCombined = func(cmd *exec.Cmd) ([]byte, error) {
+		calls++
+		if calls == 1 {
+			// 父 session：删除成功（opencode 内部已级联删除子 session）。
+			return []byte(""), nil
+		}
+		// 子 session：已被级联删掉，CLI 报 not-found。
+		return []byte("\x1b[91m\x1b[1mError: \x1b[0mSession not found: ses-child"), errors.New("exit status 1")
+	}
+
+	summary := m.BatchDelete([]types.Session{
+		{ID: "ses-parent", Directory: "/tmp"},
+		{ID: "ses-child", Directory: "/tmp"},
+	})
+
+	if calls != 2 {
+		t.Fatalf("stub called %d times, want 2 (one per session)", calls)
+	}
+	if summary.Total != 2 || summary.Succeeded != 2 || summary.Failed != 0 {
+		t.Fatalf("summary = %+v, want Total=2 Succeeded=2 Failed=0", summary)
+	}
+	for i, r := range summary.Results {
+		if !r.Success {
+			t.Errorf("Results[%d] (%s) should succeed, got error: %s", i, r.SessionID, r.Error)
 		}
 	}
 }
