@@ -64,6 +64,68 @@ func TestAlignPlugins_SkipsMatching(t *testing.T) {
 	}
 }
 
+// TestAlignPlugins_OmarchyWidget_Conditional 验证 omarchy bar-widget 的
+// 条件对齐语义：manifest.json 已存在（用户经 install --omarchy 装过）才
+// 重写三件套；目录缺失/未装过时零足迹（不创建目录、不写文件）。
+func TestAlignPlugins_OmarchyWidget_Conditional(t *testing.T) {
+	base := t.TempDir()
+	dir := filepath.Join(base, "octl.sessions") // 尚不存在：对齐不得凭空创建
+	oldOmarchy := omarchyDirOverride
+	oldPlugins := pluginsDirOverride
+	pluginsDirOverride = t.TempDir() // 隔离 opencode 插件对齐写入
+	omarchyDirOverride = dir
+	defer func() {
+		omarchyDirOverride = oldOmarchy
+		pluginsDirOverride = oldPlugins
+	}()
+
+	// 未装过：alignPlugins 不得创建目录或文件（零足迹）。
+	alignPlugins()
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("omarchy plugin dir created without opt-in (err=%v)", err)
+	}
+
+	// 装过（manifest 存在）：三件套被对齐到渲染结果。
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "manifest.json"), []byte("stale"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "statusbar.qml"), []byte("stale"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	alignPlugins()
+
+	files, err := plugins.RenderedOmarchyWidgetFiles()
+	if err != nil {
+		t.Fatalf("RenderedOmarchyWidgetFiles: %v", err)
+	}
+	for _, f := range files {
+		got, err := os.ReadFile(filepath.Join(dir, f.Name))
+		if err != nil {
+			t.Fatalf("read %s: %v", f.Name, err)
+		}
+		if string(got) != f.Content {
+			t.Errorf("%s not aligned to rendered content (len %d vs %d)", f.Name, len(got), len(f.Content))
+		}
+	}
+	// qml 应注入协议版本而非占位符。
+	if strings.Contains(string(mustFile(t, dir, "statusbar.qml")), "{{OCTL_MD5}}") {
+		t.Error("aligned statusbar.qml still contains placeholder")
+	}
+}
+
+func mustFile(t *testing.T, dir, name string) []byte {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(dir, name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
 // TestIntegration_MismatchSubscribeTriggersAlign 验证版本不符的 subscribe
 // 被拒绝的同时触发插件对齐兜底（写盘后仍拒绝，旧 sidebar 弹重启按钮由
 // 用户重启加载）。

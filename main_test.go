@@ -45,6 +45,7 @@ func TestMainUsage_ListsAllSubcommands(t *testing.T) {
 		"octl report [--date <day> | --from <t> [--to <t>]] [--dir <path>]",
 		// install 用法与 plugins 作废说明
 		"Usage: octl install [--output=<dir>]",
+		"Usage: octl install --omarchy [--output=<dir>]",
 		`plugins    Deprecated: use "octl install" (or "octl plugins install")`,
 	} {
 		if !strings.Contains(out, want) {
@@ -128,5 +129,64 @@ func TestRunInstall_CorruptTUIJSON_Exits1(t *testing.T) {
 	}
 	if string(b) != corrupt {
 		t.Error("corrupt tui.json was modified")
+	}
+}
+
+// TestRunInstall_Omarchy 验证 install --omarchy 生成三件套到默认 omarchy
+// 插件目录，且对 opencode 侧零副作用（不写 tui.json、不写 opencode
+// plugins 目录）。
+func TestRunInstall_Omarchy(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	if code := runInstall([]string{"--omarchy"}); code != 0 {
+		t.Fatalf("runInstall(--omarchy) = %d, want 0", code)
+	}
+	widgetDir := filepath.Join(home, ".config", "omarchy", "plugins", "octl.sessions")
+	for _, name := range []string{"manifest.json", "statusbar.qml", "statusbar.js"} {
+		if _, err := os.Stat(filepath.Join(widgetDir, name)); err != nil {
+			t.Errorf("widget file %s missing: %v", name, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(home, ".config", "opencode", "tui.json")); err == nil {
+		t.Error("install --omarchy must not touch tui.json")
+	}
+	if _, err := os.Stat(filepath.Join(home, ".config", "opencode", "plugins")); err == nil {
+		t.Error("install --omarchy must not touch the opencode plugins dir")
+	}
+}
+
+// TestRunInstall_OmarchyOutputOverride 验证 --output 覆盖默认目录。
+func TestRunInstall_OmarchyOutputOverride(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	out := filepath.Join(t.TempDir(), "widgets")
+
+	if code := runInstall([]string{"--omarchy", "--output", out}); code != 0 {
+		t.Fatalf("runInstall(--omarchy --output) = %d, want 0", code)
+	}
+	for _, name := range []string{"manifest.json", "statusbar.qml", "statusbar.js"} {
+		if _, err := os.Stat(filepath.Join(out, name)); err != nil {
+			t.Errorf("widget file %s missing in override dir: %v", name, err)
+		}
+	}
+	// HOME 下的默认 omarchy 目录不应被创建。
+	if _, err := os.Stat(filepath.Join(home, ".config", "omarchy")); err == nil {
+		t.Error("default omarchy dir created despite --output override")
+	}
+}
+
+// TestRunPluginsCmd_InstallOmarchyRoutes 验证 "plugins install --omarchy"
+// 与 "install --omarchy" 同义。
+func TestRunPluginsCmd_InstallOmarchyRoutes(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	if code := runPluginsCmd([]string{"install", "--omarchy"}); code != 0 {
+		t.Fatalf("runPluginsCmd(install --omarchy) = %d, want 0", code)
+	}
+	widgetDir := filepath.Join(home, ".config", "omarchy", "plugins", "octl.sessions")
+	if _, err := os.Stat(filepath.Join(widgetDir, "statusbar.qml")); err != nil {
+		t.Errorf("statusbar.qml missing: %v", err)
 	}
 }

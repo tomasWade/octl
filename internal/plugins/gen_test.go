@@ -160,3 +160,129 @@ func TestGenerateRewritesChangedFile(t *testing.T) {
 		t.Error("rewritten content still contains placeholder")
 	}
 }
+
+// TestRenderedOmarchyWidgetFiles 验证 omarchy bar-widget 三件套的渲染：
+// 文件名齐全，仅 statusbar.qml 注入协议版本（且无残留占位符），
+// manifest.json / statusbar.js 保持模板原文（不含占位符也不含版本值）。
+func TestRenderedOmarchyWidgetFiles(t *testing.T) {
+	files, err := RenderedOmarchyWidgetFiles()
+	if err != nil {
+		t.Fatalf("RenderedOmarchyWidgetFiles failed: %v", err)
+	}
+
+	want := map[string]bool{"manifest.json": false, "statusbar.qml": false, "statusbar.js": false}
+	md5Value := ProtocolMD5()
+	for _, f := range files {
+		if _, ok := want[f.Name]; !ok {
+			t.Errorf("unexpected file %q in omarchy widget set", f.Name)
+			continue
+		}
+		want[f.Name] = true
+		if strings.Contains(f.Content, "{{OCTL_MD5}}") {
+			t.Errorf("%s still contains placeholder", f.Name)
+		}
+		if f.Name == "statusbar.qml" {
+			if !strings.Contains(f.Content, md5Value) {
+				t.Errorf("statusbar.qml does not contain ProtocolMD5 %q", md5Value)
+			}
+			continue
+		}
+		if strings.Contains(f.Content, md5Value) {
+			t.Errorf("%s unexpectedly contains protocol md5 (only statusbar.qml is versioned)", f.Name)
+		}
+	}
+	for name, seen := range want {
+		if !seen {
+			t.Errorf("missing omarchy widget file %q", name)
+		}
+	}
+}
+
+// TestGenerateOmarchyWidgetWritesFiles 验证三件套落盘 + 内容一致跳过 +
+// 陈旧内容覆盖（对齐 Generate 的 writeIfChanged 语义）。
+func TestGenerateOmarchyWidgetWritesFiles(t *testing.T) {
+	outDir := t.TempDir()
+	if err := GenerateOmarchyWidget(outDir); err != nil {
+		t.Fatalf("GenerateOmarchyWidget failed: %v", err)
+	}
+
+	files, err := RenderedOmarchyWidgetFiles()
+	if err != nil {
+		t.Fatalf("RenderedOmarchyWidgetFiles failed: %v", err)
+	}
+	for _, f := range files {
+		path := filepath.Join(outDir, f.Name)
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("expected file %s: %v", path, err)
+		}
+	}
+
+	// 幂等：内容一致不重写（mtime 不变）。
+	probe := filepath.Join(outDir, "manifest.json")
+	before, err := os.Stat(probe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := GenerateOmarchyWidget(outDir); err != nil {
+		t.Fatalf("second GenerateOmarchyWidget failed: %v", err)
+	}
+	after, err := os.Stat(probe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !after.ModTime().Equal(before.ModTime()) {
+		t.Error("manifest.json rewritten despite identical content")
+	}
+
+	// 陈旧内容被渲染结果覆盖。
+	if err := os.WriteFile(probe, []byte("stale"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := GenerateOmarchyWidget(outDir); err != nil {
+		t.Fatalf("third GenerateOmarchyWidget failed: %v", err)
+	}
+	for _, f := range files {
+		if f.Name != "manifest.json" {
+			continue
+		}
+		got, err := os.ReadFile(filepath.Join(outDir, f.Name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(got) != f.Content {
+			t.Error("stale manifest.json was not replaced")
+		}
+	}
+}
+
+// TestGenerateOmarchyWidgetExpandsTilde 验证 ~ 前缀展开（与 Generate 同一
+// 收口逻辑）。
+func TestGenerateOmarchyWidgetExpandsTilde(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	if err := GenerateOmarchyWidget("~/somewhere"); err != nil {
+		t.Fatalf("GenerateOmarchyWidget failed: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, "somewhere", "manifest.json")); err != nil {
+		t.Errorf("expected manifest.json under real home: %v", err)
+	}
+	if _, err := os.Stat("~"); err == nil {
+		t.Error("literal '~' directory was created in cwd")
+	}
+}
+
+// TestDefaultOmarchyPluginDir 验证默认目录形状与 HOME 展开。
+func TestDefaultOmarchyPluginDir(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	got, err := DefaultOmarchyPluginDir()
+	if err != nil {
+		t.Fatalf("DefaultOmarchyPluginDir failed: %v", err)
+	}
+	want := filepath.Join(home, ".config", "omarchy", "plugins", "octl.sessions")
+	if got != want {
+		t.Errorf("DefaultOmarchyPluginDir = %q, want %q", got, want)
+	}
+}

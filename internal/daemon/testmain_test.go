@@ -6,7 +6,8 @@
 // 发生：测试写入的空收藏文件抢先占位，导致用户收藏丢失）。底片目录
 // 无需重定向：writeReport 仅在显式传 dir 的测试中执行。插件目录同理：
 // Run() 启动即触发 alignPlugins，不注入会把渲染模板写进真实
-// ~/.config/opencode/plugins/。
+// ~/.config/opencode/plugins/。omarchy bar-widget 目录同理注入空目录
+// （manifest 不存在 → 条件对齐零写入，绝不碰真实 ~/.config/omarchy/）。
 package daemon
 
 import (
@@ -20,6 +21,7 @@ func TestMain(m *testing.M) {
 	if err == nil {
 		setStatePathForTest(filepath.Join(dir, "state.json"))
 		pluginsDirOverride = filepath.Join(dir, "plugins")
+		omarchyDirOverride = filepath.Join(dir, "omarchy-plugins")
 	}
 	code := m.Run()
 	if dir != "" {

@@ -76,6 +76,27 @@ func Install(outputDir string) ([]string, error) {
 	}, nil
 }
 
+// InstallOmarchyWidget 生成 omarchy bar-widget 三件套到 outputDir（支持 ~
+// 前缀），返回给人读的摘要行。与 Install 不同：不碰 ~/.config/opencode/
+// tui.json，也不碰 omarchy 的 shell.json——栏位注册留给用户经
+// `omarchy bar move octl.sessions --section right` 完成（保存即热重载）。
+func InstallOmarchyWidget(outputDir string) ([]string, error) {
+	expanded, err := paths.ExpandHome(outputDir)
+	if err != nil {
+		return nil, fmt.Errorf("install --omarchy: resolve output dir: %w", err)
+	}
+	expanded, err = filepath.Abs(expanded)
+	if err != nil {
+		return nil, fmt.Errorf("install --omarchy: absolutize output dir: %w", err)
+	}
+	if err := GenerateOmarchyWidget(outputDir); err != nil {
+		return nil, fmt.Errorf("install --omarchy: %w", err)
+	}
+	return []string{
+		fmt.Sprintf("generated octl.sessions bar-widget (manifest.json, statusbar.qml, statusbar.js) in %s", expanded),
+	}, nil
+}
+
 // tuiJSONTemplate 构造 tui.json 不存在时的最小模板（含 $schema）。
 func tuiJSONTemplate(entry string) string {
 	return fmt.Sprintf("{\n  \"$schema\": \"https://opencode.ai/tui.json\",\n  \"plugin\": [\n    %q\n  ]\n}\n", entry)

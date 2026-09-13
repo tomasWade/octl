@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "id": "octl.sessions",
+  "name": "octl sessions",
+  "version": "1.0.0",
+  "author": "octl",
+  "license": "MIT",
+  "description": "Live opencode session status counts on the Omarchy bar, fed by the octl daemon over its Unix socket.",
+  "kinds": ["bar-widget"],
+  "activation": "on-demand",
+  "entryPoints": {
+    "barWidget": "statusbar.qml"
+  },
+  "barWidget": {
+    "displayName": "octl sessions",
+    "description": "Non-idle opencode session counts (error / ask / retry / busy) in the bar, a hover panel listing them, and click-to-jump into the running session.",
+    "category": "AI",
+    "allowMultiple": false
+  }
+}

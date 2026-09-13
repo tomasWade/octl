@@ -299,6 +299,29 @@ octl install
 > }
 > ```
 
+### Omarchy 状态栏集成
+
+omarchy 桌面（Quickshell）可把 session 状态常驻到状态栏（bar-widget `octl.sessions`）：
+
+```bash
+octl install --omarchy        # 等价：octl plugins install --omarchy
+```
+
+该命令生成三件套（`manifest.json` / `statusbar.qml` / `statusbar.js`）到 `~/.config/omarchy/plugins/octl.sessions/`（`--output=<dir>` 可覆盖），**不碰** `tui.json` 与 `shell.json`。随后把 widget 注册到状态栏：
+
+```bash
+omarchy bar put octl.sessions --section right    # 或手编 ~/.config/omarchy/shell.json，保存即热重载
+```
+
+widget 未出现时强制重扫一次：`omarchy-shell shell rescanPlugins`。
+
+行为：
+
+- 栏上实时显示非 IDLE session 计数：`🔴ERROR 🟡ASK 🟠RETRY 🔵BUSY`（固定顺序、仅非零）；全 IDLE 或 daemon 未连接时自隐藏（断连指数退避重连 1s→30s）
+- 点击弹出分组列表（标题截断，超 8 条折叠 `+N more`；点击外部收起）
+- 点击列表行**跳转**到该 session：已附着 tmux 的聚焦其终端窗口并 `switch-client`/`select-pane`；tmux session 无人看时拉起终端 `tmux attach`；裸终端进程聚焦其 Hyprland 窗口；无进程信息的重建/复用 tmux session 并以 TUI 模式 `opencode --session` 拉起。跳转逻辑在 widget 本地计算执行（`hyprctl` + `tmux`），daemon 与 wire 协议零参与
+- 版本自愈：daemon 检测到协议漂移时**仅在该插件目录已存在**（装过）才重写三件套；bar-widget 实例不被热重载替换，`omarchy-restart-shell` 后新实例以新版本重连；未装过的机器零足迹
+
 ### OpenCode Sidebar 集成
 
 两个插件都安装、且 octl daemon 运行后，进入 opencode 的 **session 聊天视图**，右侧 sidebar 会显示 `Session Status` 面板。

@@ -297,6 +297,29 @@ It will:
 > }
 > ```
 
+### Omarchy status bar integration
+
+On the omarchy desktop (Quickshell) you can pin live session status to the bar (bar-widget `octl.sessions`):
+
+```bash
+octl install --omarchy        # equivalent: octl plugins install --omarchy
+```
+
+It generates the three-file widget (`manifest.json` / `statusbar.qml` / `statusbar.js`) into `~/.config/omarchy/plugins/octl.sessions/` (`--output=<dir>` overrides) and touches **neither** `tui.json` nor `shell.json`. Then register it on the bar:
+
+```bash
+omarchy bar put octl.sessions --section right    # or edit ~/.config/omarchy/shell.json; saving hot-reloads
+```
+
+If the widget does not show up, force a plugin rescan: `omarchy-shell shell rescanPlugins`.
+
+Behavior:
+
+- The bar shows live non-idle session counts: `🔴ERROR 🟡ASK 🟠RETRY 🔵BUSY` (fixed order, non-zero only); hides itself when everything is idle or the daemon is unreachable (reconnects with 1s→30s exponential backoff)
+- Clicking the chip row opens a grouped list (truncated titles, folding to `+N more` past 8 entries; click outside to dismiss)
+- Clicking a row **jumps** to that session: tmux-attached targets get their terminal window focused plus `switch-client`/`select-pane`; an unwatched tmux session gets a terminal running `tmux attach`; bare terminal processes get their Hyprland window focused; sessions with no process info get a rebuilt/reused tmux session launched with the interactive `opencode --session`. The jump is computed and executed locally by the widget (`hyprctl` + `tmux`) — the daemon and wire protocol are untouched
+- Version self-healing: on protocol drift the daemon rewrites the three files **only if the plugin directory already exists** (you opted in); bar-widget instances are not hot-swapped, so run `omarchy-restart-shell` — the new instance reconnects with the new version. Machines without the widget installed stay untouched
+
 ### opencode Sidebar Integration
 
 With both plugins installed and the daemon running, open any **session chat view** in opencode — the right sidebar shows the `Session Status` panel.

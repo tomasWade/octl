@@ -121,6 +121,8 @@ func printMainUsage(out io.Writer, fs *flag.FlagSet) {
 	fmt.Fprintf(out, "  install    Generate octl-hook.js and octl-sidebar.tsx and register the sidebar\n")
 	fmt.Fprintf(out, "             in ~/.config/opencode/tui.json\n")
 	fmt.Fprintf(out, "             Usage: octl install [--output=<dir>]\n")
+	fmt.Fprintf(out, "             --omarchy generates the omarchy bar-widget (octl.sessions) instead\n")
+	fmt.Fprintf(out, "             Usage: octl install --omarchy [--output=<dir>]\n")
 	fmt.Fprintf(out, "  plugins    Deprecated: use \"octl install\" (or \"octl plugins install\")\n")
 	fmt.Fprintf(out, "  query      Query the daemon without a TUI and exit\n")
 	fmt.Fprintf(out, "             Methods: snaps | sessions | messages <sessionId> | daily\n")
@@ -140,16 +142,14 @@ func printMainUsage(out io.Writer, fs *flag.FlagSet) {
 	fmt.Fprintf(out, "             Usage: octl purge <sessionId>... [--yes]\n")
 }
 
-// runInstall 处理 "octl install" 与 "octl plugins install" 子命令：生成
-// 插件文件并把 sidebar 注册进 ~/.config/opencode/tui.json（只追加不替换）。
+// runInstall 处理 "octl install" 与 "octl plugins install" 子命令：默认
+// 生成 opencode 插件文件并把 sidebar 注册进 ~/.config/opencode/tui.json
+// （只追加不替换）；--omarchy 则生成 omarchy 状态栏 bar-widget
+// （octl.sessions 三件套），不碰任何注册文件。
 func runInstall(args []string) int {
-	defaultDir, err := plugins.DefaultOutputDir()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "install: resolve default output dir: %v\n", err)
-		return 1
-	}
 	fs := flag.NewFlagSet("install", flag.ExitOnError)
-	outputDir := fs.String("output", defaultDir, "Output directory for generated plugin files")
+	outputDir := fs.String("output", "", "Output directory for generated plugin files")
+	omarchy := fs.Bool("omarchy", false, "Generate the omarchy bar-widget (octl.sessions) instead of the opencode plugins")
 	_ = fs.Parse(args) // ExitOnError：出错时已 os.Exit(2)
 
 	if fs.NArg() > 0 {
@@ -157,7 +157,21 @@ func runInstall(args []string) int {
 		return 2
 	}
 
-	summary, err := plugins.Install(*outputDir)
+	if *omarchy {
+		return runInstallOmarchy(*outputDir)
+	}
+
+	defaultDir, err := plugins.DefaultOutputDir()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "install: resolve default output dir: %v\n", err)
+		return 1
+	}
+	dir := *outputDir
+	if dir == "" {
+		dir = defaultDir
+	}
+
+	summary, err := plugins.Install(dir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "install: %v\n", err)
 		return 1
@@ -166,6 +180,35 @@ func runInstall(args []string) int {
 		fmt.Println(line)
 	}
 	fmt.Println("restart opencode for the sidebar panel to take effect")
+	return 0
+}
+
+// runInstallOmarchy 是 install --omarchy 的分流实现：生成三件套到
+// ~/.config/omarchy/plugins/octl.sessions/（--output 可覆盖），随后打印
+// 栏位注册与插件重扫提示（omarchy 保存 shell.json 热重载；新插件目录
+// 未被发现时需手动 rescanPlugins）。
+func runInstallOmarchy(outputDir string) int {
+	defaultDir, err := plugins.DefaultOmarchyPluginDir()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "install: resolve default omarchy plugin dir: %v\n", err)
+		return 1
+	}
+	dir := outputDir
+	if dir == "" {
+		dir = defaultDir
+	}
+
+	summary, err := plugins.InstallOmarchyWidget(dir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "install: %v\n", err)
+		return 1
+	}
+	for _, line := range summary {
+		fmt.Println(line)
+	}
+	fmt.Println("register it on the bar: omarchy bar put octl.sessions --section right")
+	fmt.Println("(or edit ~/.config/omarchy/shell.json directly; saving hot-reloads)")
+	fmt.Println("if the widget does not show up: omarchy-shell shell rescanPlugins")
 	return 0
 }
 
@@ -179,13 +222,18 @@ func runPluginsCmd(args []string) int {
 	return 2
 }
 
-// printInstallUsage 输出 install 子命令用法（含 plugins 旧用法的迁移提示）。
+// printInstallUsage 输出 install 子命令用法（含 plugins 旧用法的迁移提示
+// 与 --omarchy 分流说明）。
 func printInstallUsage(w io.Writer) {
 	fmt.Fprintf(w, `"octl plugins --output=<dir>" is deprecated.`+"\n")
 	fmt.Fprintf(w, "\nGenerate the opencode plugins and register the sidebar in tui.json:\n")
 	fmt.Fprintf(w, "  octl install [--output=<dir>]\n")
 	fmt.Fprintf(w, "  octl plugins install [--output=<dir>]   (same as above)\n")
-	fmt.Fprintf(w, "\nThe default output directory is ~/.config/opencode/plugins.\n")
+	fmt.Fprintf(w, "\nGenerate the omarchy status bar widget (octl.sessions) instead:\n")
+	fmt.Fprintf(w, "  octl install --omarchy [--output=<dir>]\n")
+	fmt.Fprintf(w, "  octl plugins install --omarchy [--output=<dir>]   (same as above)\n")
+	fmt.Fprintf(w, "\nThe default output directory is ~/.config/opencode/plugins\n")
+	fmt.Fprintf(w, "(--omarchy: ~/.config/omarchy/plugins/octl.sessions).\n")
 	fmt.Fprintf(w, "Run `octl --help` for the full command overview.\n")
 }
 

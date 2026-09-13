@@ -3,6 +3,7 @@ package plugins
 
 import (
 	"crypto/md5"
+	"embed"
 	"encoding/hex"
 	"fmt"
 	"os"
@@ -10,8 +11,6 @@ import (
 	"strings"
 
 	"github.com/tomasWade/octl/internal/paths"
-
-	_ "embed"
 )
 
 //go:embed templates/octl-hook.js
@@ -19,6 +18,9 @@ var hookTemplate string
 
 //go:embed templates/octl-sidebar.tsx
 var sidebarTemplate string
+
+//go:embed templates/omarchy-statusbar
+var omarchyFS embed.FS
 
 // placeholder 是模板内嵌的协议版本占位符文本。
 const placeholder = "{{OCTL_MD5}}"
@@ -127,6 +129,66 @@ func Generate(outputDir string) error {
 	}
 
 	return nil
+}
+
+// RenderedOmarchyWidgetFiles 渲染 omarchy bar-widget 三件套
+// （manifest.json / statusbar.qml / statusbar.js）。仅 statusbar.qml 注入
+// 协议版本占位符——widget 的 subscribe 版本比对只取决于 qml 内嵌常量；
+// manifest 与 js 不参与协议比对，也不影响 computeProtocolMD5（协议 MD5
+// 仍只覆盖 opencode 双插件，omarchy widget 不改变既有升级语义）。
+func RenderedOmarchyWidgetFiles() ([]renderedFile, error) {
+	md5Value := ProtocolMD5()
+	names := []string{"manifest.json", "statusbar.qml", "statusbar.js"}
+	out := make([]renderedFile, 0, len(names))
+	for _, name := range names {
+		raw, err := omarchyFS.ReadFile("templates/omarchy-statusbar/" + name)
+		if err != nil {
+			return nil, fmt.Errorf("render omarchy widget: %w", err)
+		}
+		content := string(raw)
+		if name == "statusbar.qml" {
+			content = strings.ReplaceAll(content, placeholder, md5Value)
+		}
+		out = append(out, renderedFile{Name: name, Content: content})
+	}
+	return out, nil
+}
+
+// GenerateOmarchyWidget 把 omarchy bar-widget 三件套写入 outputDir
+// （~ 前缀展开、内容一致跳过、原子替换），供 `octl install --omarchy`
+// 与 daemon 的条件对齐共用。
+func GenerateOmarchyWidget(outputDir string) error {
+	outputDir, err := paths.ExpandHome(outputDir)
+	if err != nil {
+		return fmt.Errorf("generate omarchy widget: resolve output dir: %w", err)
+	}
+	if err := os.MkdirAll(outputDir, 0755); err != nil {
+		return fmt.Errorf("generate omarchy widget: %w", err)
+	}
+
+	files, err := RenderedOmarchyWidgetFiles()
+	if err != nil {
+		return err
+	}
+	for _, f := range files {
+		path := filepath.Join(outputDir, f.Name)
+		if err := writeIfChanged(path, f.Content); err != nil {
+			return fmt.Errorf("generate omarchy widget: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// DefaultOmarchyPluginDir 返回 omarchy bar-widget 的默认安装目录
+// ~/.config/omarchy/plugins/octl.sessions（omarchy 的插件发现约定：
+// ~/.config/omarchy/plugins/<插件 id>/）。
+func DefaultOmarchyPluginDir() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".config", "omarchy", "plugins", "octl.sessions"), nil
 }
 
 // DefaultOutputDir 返回插件默认输出目录 ~/.config/opencode/plugins

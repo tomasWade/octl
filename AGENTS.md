@@ -212,6 +212,14 @@ sidebar 插件由 `octl install` 自动以 `file://` 绝对路径条目注册进
 
 **版本不一致重启按钮**：daemon 拒绝协议 md5 不符的 subscribe 后，sidebar 停止重连（重连只会再次被拒）并弹出「⟳ 重启」按钮（`versionMismatch` signal，黄色 `#e0af68`，左键触发）交由用户决策——**仅 md5 不一致时弹出，连不上 daemon（离线）只显示 offline 提示不弹按钮**。点击经 `requestRestart` 执行 `buildRestartPlan`（纯函数，配方与 restart.tsx 一致）：tmux 内 `respawn-pane -k -t <pane> -c <cwd> "opencode -s '<sid>'"` 原地重生（3s 兜底 process.exit）；裸终端把 `sleep 1 && opencode [-s sid]` 写入 history、onDispose 时机 TIOCSTI 注入 tty 输入队列（EPERM 降级为 stdout 提示）后 `dispatchCommand("app.exit")` 优雅退出；sessionId 取自 `api.route.current`。opencode 对 TUI 插件无热重载（1.18.30 实测，SIGUSR2/reload 只 dispose project 实例、不重建 TUI 插件），重启实例是加载新插件的唯一途径。
 
+## omarchy 状态栏 bar-widget（octl.sessions）
+
+omarchy 桌面（Quickshell）的状态栏 widget，模板三件套住 `internal/plugins/templates/omarchy-statusbar/`（manifest.json / statusbar.qml / statusbar.js）。生成入口 `octl install --omarchy`（`octl plugins install --omarchy` 同义；默认 `octl install` 行为不变），默认输出 `~/.config/omarchy/plugins/octl.sessions/`（`plugins.DefaultOmarchyPluginDir()`），不碰 tui.json/shell.json；栏位注册由用户执行 `omarchy bar put octl.sessions --section right`（新增条目必须用 `put`——`move` 只挪已有条目，真机验证；或手编 shell.json 热重载）。**omarchy bar-widget 实例不被任何热重载替换**（file-watch / `rescanPlugins` / 删除重装均不换实例，旧实例的 IPC handler 压住新实例；真机验证，与 opencode TUI 插件同语义）——改动要生效必须 `omarchy-restart-shell`；调试探针 `omarchy-shell octl.sessions version`（返回协议 MD5 + 构建标记）。
+
+- `statusbar.js` 是纯逻辑层（groupCounts 定序非零计数 / groupTooltip 分组折叠 / classifyJump 四分类 / buildJumpScript 四场景 sh 脚本），**QML import 与 bun CJS 互操作双兼容**（QML JS 资源不支持 export，靠 `typeof module` 守卫导出；测试经默认导入解构）。仅 `statusbar.qml` 注入 `{{OCTL_MD5}}`（`RenderedOmarchyWidgetFiles`）；协议 MD5 仍只覆盖 opencode 双插件，本 widget 不影响既有升级语义。
+- widget 订阅 daemon `view` 频道：全 IDLE/未连接自隐藏，断连指数退避 1s→30s；弹层为 `Ui.PopupCard` 默认 **click 触发**（HyprlandFocusGrab 点外关闭，与 Tray 同款生产路径）——**hover 触发两条路线真机均闪烁循环，不可用**：KeyboardPanel（全屏 layer-shell + 整屏 dismissArea，打开即截走 bar 的 hover）、PopupCard `triggerMode:"hover"`（亦复现）；行点击跳转在本地执行（attached：client tty 探测 + hyprctl focuswindow + switch-client/select-window/select-pane；detached：`omarchy launch terminal tmux attach`；bare：pid PPID 上溯 focuswindow；dead：`makeTmuxSessionName` + `new-session` + TUI `opencode --session`）。所有 tmux 目标单引号包裹。
+- daemon 侧唯一改动：`alignPlugins` 的 omarchy 段为**条件对齐**——仅 `~/.config/omarchy/plugins/octl.sessions/manifest.json` 已存在才重写三件套（装过才自愈，未装机器零足迹）；测试经 `omarchyDirOverride` 注入（TestMain 已默认指向空目录）。
+
 ## 测试
 
 ```bash

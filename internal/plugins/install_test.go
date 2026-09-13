@@ -333,3 +333,46 @@ func containsLine(lines []string, substr string) bool {
 	}
 	return false
 }
+
+// TestInstallOmarchyWidget_GeneratesThreeFiles：生成三件套 + 摘要行，
+// 且绝不触碰 tui.json（与 Install 的注册职责严格分离）。
+func TestInstallOmarchyWidget_GeneratesThreeFiles(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	outDir := home + "/.config/omarchy/plugins/octl.sessions"
+	summary, err := InstallOmarchyWidget(outDir)
+	if err != nil {
+		t.Fatalf("InstallOmarchyWidget failed: %v", err)
+	}
+
+	for _, name := range []string{"manifest.json", "statusbar.qml", "statusbar.js"} {
+		if _, err := os.Stat(filepath.Join(outDir, name)); err != nil {
+			t.Errorf("widget file %s missing: %v", name, err)
+		}
+	}
+	if !containsLine(summary, "octl.sessions") {
+		t.Errorf("summary does not mention octl.sessions: %v", summary)
+	}
+	if _, err := os.Stat(home + "/.config/opencode/tui.json"); err == nil {
+		t.Error("tui.json must not be touched by install --omarchy")
+	}
+}
+
+// TestInstallOmarchyWidget_RelativeDirAbsolutized：相对 --output 落 cwd 下
+// 绝对路径（与 Install 的 absolutize 语义一致，摘要里给出可定位的路径）。
+func TestInstallOmarchyWidget_RelativeDirAbsolutized(t *testing.T) {
+	cwd := t.TempDir()
+	chdir(t, cwd)
+
+	summary, err := InstallOmarchyWidget("widgets")
+	if err != nil {
+		t.Fatalf("InstallOmarchyWidget failed: %v", err)
+	}
+	if !containsLine(summary, filepath.Join(cwd, "widgets")) {
+		t.Errorf("summary does not contain absolutized dir: %v", summary)
+	}
+	if _, err := os.Stat(filepath.Join(cwd, "widgets", "manifest.json")); err != nil {
+		t.Errorf("manifest.json missing in relative output dir: %v", err)
+	}
+}

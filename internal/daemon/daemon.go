@@ -174,12 +174,20 @@ var alignPluginsMu sync.Mutex
 // pluginsDirOverride 供测试注入插件对齐目录；空时用默认目录。
 var pluginsDirOverride string
 
+// omarchyDirOverride 供测试注入 omarchy bar-widget 对齐目录；空时用默认目录。
+var omarchyDirOverride string
+
 // alignPlugins 把内嵌模板的渲染结果写入默认插件目录
 // （~/.config/opencode/plugins/），md5 不一致才写。两个触发点：daemon 启动
 // 时、收到版本不符的 subscribe 时。由此升级流程收敛为「替换二进制 + 重启
 // daemon」：磁盘立即对齐，新启动的 opencode 直接用新插件；运行中实例的
 // sidebar 被拒后弹出「重启」按钮，由用户点击原地重启加载新插件（opencode
 // 对 TUI 插件无热重载，1.18.30 实测）。失败只记日志不阻塞。
+//
+// omarchy bar-widget（octl.sessions）为条件对齐：仅当其 manifest.json
+// 已存在（用户经 `octl install --omarchy` 装过）才重写三件套，让版本
+// 漂移经「重写 → omarchy file-watch 热重载 → 新 MD5 重连」自愈；未装过
+// 的机器零足迹（非 omarchy 环境不凭空创建 ~/.config/omarchy/）。
 func alignPlugins() {
 	alignPluginsMu.Lock()
 	defer alignPluginsMu.Unlock()
@@ -194,6 +202,22 @@ func alignPlugins() {
 	}
 	if err := plugins.Generate(dir); err != nil {
 		log.Printf("[daemon] align plugins: %v", err)
+	}
+
+	omarchyDir := omarchyDirOverride
+	if omarchyDir == "" {
+		var err error
+		omarchyDir, err = plugins.DefaultOmarchyPluginDir()
+		if err != nil {
+			log.Printf("[daemon] align omarchy widget: resolve dir: %v", err)
+			return
+		}
+	}
+	if _, err := os.Stat(filepath.Join(omarchyDir, "manifest.json")); err != nil {
+		return
+	}
+	if err := plugins.GenerateOmarchyWidget(omarchyDir); err != nil {
+		log.Printf("[daemon] align omarchy widget: %v", err)
 	}
 }
 
