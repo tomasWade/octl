@@ -120,6 +120,39 @@ function groupTooltip(sessions, maxItems) {
   return { groups: groups, hidden: hidden }
 }
 
+// collectFavorites 提取 ViewMsg.favorites（daemon 按插入顺序预组装的收藏
+// ViewSession 数组），防御性过滤 null / 缺 sessionId，按 sessionId 去重
+// （first-win）——与 collectSessions 对称。
+function collectFavorites(view) {
+  var out = []
+  var seen = {}
+  var list = (view && view.favorites) || []
+  for (var i = 0; i < list.length; i++) {
+    var s = list[i]
+    if (!s || !s.sessionId || seen[s.sessionId]) continue
+    seen[s.sessionId] = true
+    out.push(s)
+  }
+  return out
+}
+
+// favoriteRows 把收藏 ViewSession 数组映射为弹层行：
+// {sessionId, title(截断), session(完整引用供跳转)}。不显示状态图标、
+// 不折叠——收藏为手动策展的小集合，全量展示。
+function favoriteRows(favorites) {
+  var list = favorites || []
+  var out = []
+  for (var i = 0; i < list.length; i++) {
+    var s = list[i]
+    out.push({
+      sessionId: s.sessionId,
+      title: truncateTitle(s.title, 40),
+      session: s,
+    })
+  }
+  return out
+}
+
 // makeTmuxSessionName 为 dead 场景新建 tmux session 生成合法名称：
 // title 清理特殊字符（仅保留字母数字与中文）后截前 15 字，空回退
 // sessionId，两者皆空回退 "unknown"。与 sidebar 插件同名函数同规则。
@@ -256,6 +289,8 @@ if (typeof module !== "undefined" && module.exports) {
     groupCounts: groupCounts,
     truncateTitle: truncateTitle,
     groupTooltip: groupTooltip,
+    collectFavorites: collectFavorites,
+    favoriteRows: favoriteRows,
     makeTmuxSessionName: makeTmuxSessionName,
     classifyJump: classifyJump,
     buildJumpScript: buildJumpScript,

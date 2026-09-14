@@ -8,7 +8,8 @@ import "statusbar.js" as Statusbar
 // octl.sessions — omarchy bar-widget：订阅 octl daemon 的 view 频道，栏上
 // 实时显示非 IDLE session 计数（🔴ERROR 🟡PERMISSION(ASK) 🟠RETRY 🔵BUSY，
 // 固定顺序、仅非零、不带标题）；全 IDLE 或 daemon 未连接时自隐藏。
-// 点击弹出分组列表（标题截断、超 8 条折叠 +N more），行点击经
+// 点击弹出分组列表（标题截断、超 8 条折叠 +N more）+ 收藏列表（daemon
+// ViewMsg.favorites 原序全量展示，空则整节隐藏），行点击经
 // statusbar.js 生成的跳转脚本本地执行（hyprctl 聚焦 + tmux 切换/拉起），
 // daemon 与 wire 协议零参与。
 //
@@ -48,9 +49,11 @@ Panel {
   property bool versionRejected: false
   property int retryDelayMs: 1000
   property var sessions: []
+  property var favorites: []
 
   readonly property var counts: root.healthy ? Statusbar.groupCounts(root.sessions) : []
   readonly property var tooltipData: Statusbar.groupTooltip(root.sessions, 8)
+  readonly property var favoriteData: root.healthy ? Statusbar.favoriteRows(root.favorites) : []
 
   visible: root.healthy && root.counts.length > 0
   onVisibleChanged: if (!visible) root.close()
@@ -85,6 +88,7 @@ Panel {
       root.retryDelayMs = 1000
     } else if (msg.type === "view") {
       root.sessions = Statusbar.collectSessions(msg)
+      root.favorites = Statusbar.collectFavorites(msg)
     } else if (msg.type === "response" && msg.ok === false) {
       // daemon 拒绝（典型为协议版本不一致）：隐藏等待对齐自愈。
       root.healthy = false
@@ -149,7 +153,7 @@ Panel {
     function hide(): void { root.close() }
     function toggle(): void { root.toggle() }
     // 构建探针：协议 MD5 + 触发模式标记，核对热重载是否替换了运行实例。
-    function version(): string { return root.protocolVersion + " click-v1" }
+    function version(): string { return root.protocolVersion + " click-v4-fav" }
   }
 
   // ---------------------------------------------------------------- bar UI
@@ -281,6 +285,59 @@ Panel {
         color: root.dim
         font.family: root.fontFamily
         font.pixelSize: Style.font.caption
+      }
+
+      // 收藏列表：daemon ViewMsg.favorites 原序全量展示（不折叠），
+      // 空收藏整节隐藏。行点击与状态行同款跳转。标题黄色 #e0af68
+      // 与 sidebar 收藏高亮同色；行不显示状态图标。
+      Text {
+        visible: root.favoriteData.length > 0
+        text: "★ Favorites · " + root.favoriteData.length
+        color: "#e0af68"
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.caption
+      }
+
+      Repeater {
+        model: root.favoriteData
+
+        Rectangle {
+          id: favoriteRow
+          required property var modelData
+          width: parent.width
+          height: favoriteRowText.implicitHeight + Style.space(6)
+          radius: Style.space(4)
+          color: favMouse.containsMouse ? Style.selectedFillFor(root.foreground, Color.accent) : "transparent"
+
+          MouseArea {
+            id: favMouse
+            anchors.fill: parent
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            onClicked: {
+              root.runJump(favoriteRow.modelData.session)
+              root.close()
+            }
+          }
+
+          Row {
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.leftMargin: Style.spacing.sm
+            anchors.rightMargin: Style.spacing.sm
+            anchors.verticalCenter: parent.verticalCenter
+
+            Text {
+              id: favoriteRowText
+              text: favoriteRow.modelData.title
+              color: favMouse.containsMouse ? root.foreground : root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.body
+              elide: Text.ElideRight
+              width: parent.width
+            }
+          }
+        }
       }
     }
   }

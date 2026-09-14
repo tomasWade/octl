@@ -316,7 +316,7 @@ If the widget does not show up, force a plugin rescan: `omarchy-shell shell resc
 Behavior:
 
 - The bar shows live non-idle session counts: `🔴ERROR 🟡ASK 🟠RETRY 🔵BUSY` (fixed order, non-zero only); hides itself when everything is idle or the daemon is unreachable (reconnects with 1s→30s exponential backoff)
-- Clicking the chip row opens a grouped list (truncated titles, folding to `+N more` past 8 entries; click outside to dismiss)
+- Clicking the chip row opens a grouped list (truncated titles, folding to `+N more` past 8 entries; click outside to dismiss) plus a favorites list (`★ Favorites`, shown in daemon insertion order without folding, hidden entirely when empty)
 - Clicking a row **jumps** to that session: tmux-attached targets get their terminal window focused plus `switch-client`/`select-pane`; an unwatched tmux session gets a terminal running `tmux attach`; bare terminal processes get their Hyprland window focused; sessions with no process info get a rebuilt/reused tmux session launched with the interactive `opencode --session`. The jump is computed and executed locally by the widget (`hyprctl` + `tmux`) — the daemon and wire protocol are untouched
 - Version self-healing: on protocol drift the daemon rewrites the three files **only if the plugin directory already exists** (you opted in); bar-widget instances are not hot-swapped, so run `omarchy-restart-shell` — the new instance reconnects with the new version. Machines without the widget installed stay untouched
 

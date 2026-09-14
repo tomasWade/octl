@@ -12,6 +12,8 @@ const {
   groupCounts,
   truncateTitle,
   groupTooltip,
+  collectFavorites,
+  favoriteRows,
   makeTmuxSessionName,
   classifyJump,
   buildJumpScript,
@@ -149,6 +151,52 @@ describe("groupTooltip", () => {
     expect(out.groups[0].items.length).toBe(1);
     expect(out.hidden).toBe(1);
     expect(groupTooltip([])).toEqual({ groups: [], hidden: 0 });
+  });
+});
+
+describe("collectFavorites", () => {
+  test("提取 view.favorites，保持插入顺序，缺 sessionId 过滤", () => {
+    const a = sess("ses_a");
+    const b = sess("ses_b", { status: "BUSY", pid: 123, tmuxPane: "%5", tmuxSession: "$29" });
+    const out = collectFavorites({ favorites: [a, b] });
+    expect(out).toEqual([a, b]);
+    expect(out[1].tmuxSession).toBe("$29");
+  });
+  test("按 sessionId 去重（first-win）", () => {
+    const a = sess("ses_a");
+    const aDup = sess("ses_a");
+    const out = collectFavorites({ favorites: [a, aDup] });
+    expect(out).toHaveLength(1);
+    expect(out[0]).toBe(a);
+  });
+  test("空 view / 缺字段 / null 元素安全", () => {
+    expect(collectFavorites({})).toEqual([]);
+    expect(collectFavorites(null)).toEqual([]);
+    expect(collectFavorites({ favorites: [null, sess("ses_x"), {}] }).map((s: any) => s.sessionId)).toEqual(["ses_x"]);
+  });
+});
+
+describe("favoriteRows", () => {
+  test("映射行结构：标题截断 / 保留完整 session 引用 / 不带状态图标", () => {
+    const busy = sess("ses_a", { title: "A".repeat(60), status: "BUSY", pid: 123, tmuxPane: "%5", tmuxSession: "$29" });
+    const idle = sess("ses_b");
+    const out = favoriteRows([busy, idle]);
+    expect(out).toHaveLength(2);
+    expect(out[0].sessionId).toBe("ses_a");
+    expect(out[0].title.length).toBe(40);
+    expect(out[0].title.endsWith("…")).toBe(true);
+    // session 完整引用供 buildJumpScript 跳转使用；活跃态也不带状态图标
+    expect(out[0].session).toBe(busy);
+    expect(out[0]).not.toHaveProperty("icon");
+    expect(out[1].session).toBe(idle);
+  });
+  test("不折叠：全量输出", () => {
+    const list = Array.from({ length: 12 }, (_, i) => sess("f" + i));
+    expect(favoriteRows(list)).toHaveLength(12);
+  });
+  test("空输入安全", () => {
+    expect(favoriteRows([])).toEqual([]);
+    expect(favoriteRows(null)).toEqual([]);
   });
 });
 
