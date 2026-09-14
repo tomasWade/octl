@@ -190,7 +190,10 @@ describe("buildJumpScript", () => {
     // 有 client 分支：client tty 探测 → PPID 上溯 → focuswindow → 导航三连
     expect(script).toContain(`tmux list-clients -t "$__octl_sess" -F '#{client_tty}'`);
     expect(script).toContain(`hyprctl clients -j`);
+    // focuswindow 双语法：旧语法（hyprlang 配置）失败时回退 Lua 表达式
+    // （Hyprland 0.56 Lua 配置管理器下 dispatch 走 hl.dispatch Lua 桥）
     expect(script).toContain(`hyprctl dispatch focuswindow "pid:$__octl_win"`);
+    expect(script).toContain(`hyprctl dispatch "hl.dsp.focus({window=\\"pid:$__octl_win\\"})"`);
     expect(script).toContain(`tmux switch-client -c "$__octl_ctty" -t "$__octl_sess"`);
     expect(script).toContain(`tmux select-window -t "$__octl_pane"`);
     expect(script).toContain(`tmux select-pane -t "$__octl_pane"`);
@@ -210,14 +213,19 @@ describe("buildJumpScript", () => {
     expect(script).not.toContain("hyprctl");
   });
 
-  test("bare：pid PPID 上溯聚焦窗口，不含 tmux 命令", () => {
+  test("bare：pid PPID 上溯聚焦窗口，上溯失败回落 dead 行为", () => {
     const script = buildJumpScript(sess("ses_a", { pid: 4242, status: "RETRY" }));
     expect(script).toContain(`__octl_p="4242"`);
     expect(script).toContain(`hyprctl clients -j`);
+    // focuswindow 双语法 fallback（同 attached）
     expect(script).toContain(`hyprctl dispatch focuswindow "pid:$__octl_p"`);
+    expect(script).toContain(`hyprctl dispatch "hl.dsp.focus({window=\\"pid:$__octl_p\\"})"`);
     expect(script).toContain(`ps -o ppid= -p "$__octl_p"`);
-    expect(script).not.toContain("tmux ");
-    expect(script).not.toContain("omarchy launch");
+    expect(script).toContain("exit 0");
+    // 上溯穷尽（headless：opencode serve / 后台 run，祖先链无 Hyprland 窗口）
+    // → 回落 dead 行为：重建/复用 tmux session 拉起查看实例
+    expect(script).toContain(`__octl_name='tsesa'`);
+    expect(script).toContain(`omarchy launch terminal tmux attach -t "$__octl_name"`);
   });
 
   test("dead：has-session/new-session/attach，--session 非 run，目录单引号", () => {

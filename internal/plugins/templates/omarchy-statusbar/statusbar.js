@@ -169,6 +169,11 @@ function buildJumpScript(s) {
     // 进程沿 PPID 上溯命中 hyprctl 窗口 pid）后 switch-client 导航到目标
     // pane；无 client → 拉起终端 attach（detached 行为）。任一环失败静默
     // 降级（focuswindow 已先行，后续命令 2>/dev/null 不影响前者）。
+    // focuswindow 双语法 fallback：Hyprland 0.56 起 Lua 配置管理器下
+    // `hyprctl dispatch` 被原样拼进 `hl.dispatch(<in>)` 执行（v0.56.2
+    // HyprCtl.cpp dispatchRequest），旧 `focuswindow pid:N` 拼出非法 Lua
+    // 必然报错；先试旧语法（hyprlang 配置仍走旧表），失败再试
+    // `hl.dsp.focus({window="pid:N"})`（Lua 配置正确形态，实验验证）。
     return (
       "__octl_sess=" + sess + "\n" +
       "__octl_pane=" + pane + "\n" +
@@ -184,7 +189,7 @@ function buildJumpScript(s) {
       "    done\n" +
       "  done\n" +
       '  if [ -n "$__octl_win" ]; then\n' +
-      '    hyprctl dispatch focuswindow "pid:$__octl_win" 2>/dev/null\n' +
+      '    hyprctl dispatch focuswindow "pid:$__octl_win" 2>/dev/null || hyprctl dispatch "hl.dsp.focus({window=\\"pid:$__octl_win\\"})" 2>/dev/null\n' +
       "  fi\n" +
       '  tmux switch-client -c "$__octl_ctty" -t "$__octl_sess" 2>/dev/null\n' +
       '  tmux select-window -t "$__octl_pane" 2>/dev/null\n' +
@@ -202,24 +207,36 @@ function buildJumpScript(s) {
 
   if (kind === "bare") {
     // 裸终端进程：pid 沿 PPID 上溯命中某个 Hyprland 窗口则聚焦。
+    // focuswindow 双语法 fallback，理由同 attached 分支注释。
+    // 上溯穷尽仍无窗口（headless 实例：opencode serve / daemon 后台拉起的
+    // run，祖先链在 supervisord/systemd 就断了）→ 回落 dead 行为，按标题
+    // 重建/复用 tmux session 拉起可见查看实例——任务是独立进程，新实例
+    // 只做查看，不影响在跑的任务；静默无动静比多开更伤。
     return (
       hyprlandPidsSnippet() + "\n" +
       '__octl_p="' + pid + '"\n' +
       'while [ -n "$__octl_p" ] && [ "$__octl_p" -gt 1 ] 2>/dev/null; do\n' +
       '  if printf \'%s\\n\' $__octl_pids | grep -qx "$__octl_p"; then\n' +
-      '    hyprctl dispatch focuswindow "pid:$__octl_p" 2>/dev/null\n' +
+      '    hyprctl dispatch focuswindow "pid:$__octl_p" 2>/dev/null || hyprctl dispatch "hl.dsp.focus({window=\\"pid:$__octl_p\\"})" 2>/dev/null\n' +
       "    exit 0\n" +
       "  fi\n" +
       '  __octl_p="$(ps -o ppid= -p "$__octl_p" 2>/dev/null | tr -d \' \')"\n' +
-      "done\n"
+      "done\n" +
+      deadTail(s)
     )
   }
 
   // dead：重建/复用以标题命名的 tmux session（TUI 模式 opencode --session，
   // 不能用 opencode run —— 非交互缺 message 即退，session 建立即死），
   // 再拉终端附着。shell-command 参数整体单引号包裹，交由 tmux 的 sh -c 执行。
+  return deadTail(s)
+}
+
+// deadTail 生成"重建/复用 tmux session + 拉终端附着"脚本尾巴，dead 场景
+// 与 bare 上溯失败回落共用。
+function deadTail(s) {
   var name = shQuote(makeTmuxSessionName(s.title, s.sessionId))
-  var cwdArg = dir ? " -c " + shQuote(dir) : ""
+  var cwdArg = s.directory ? " -c " + shQuote(s.directory) : ""
   var command = shQuote("opencode --session " + String(s.sessionId))
   return (
     "__octl_name=" + name + "\n" +
