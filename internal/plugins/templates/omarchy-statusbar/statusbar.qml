@@ -6,8 +6,9 @@ import qs.Ui
 import "statusbar.js" as Statusbar
 
 // octl.sessions — omarchy bar-widget：订阅 octl daemon 的 view 频道，栏上
-// 实时显示非 IDLE session 计数（🔴ERROR 🟡PERMISSION(ASK) 🟠RETRY 🔵BUSY，
-// 固定顺序、仅非零、不带标题）；全 IDLE 或 daemon 未连接时自隐藏。
+// 实时显示非 IDLE session 计数（🔴ERROR/PERMISSION 🟠RETRY 🟡BUSY，配色
+// 对齐 herdr：红=需要你、黄=运行中；固定顺序、仅非零、不带标题）；全
+// IDLE 或 daemon 未连接时自隐藏。
 // 点击弹出分组列表（标题截断、超 8 条折叠 +N more）+ 收藏列表（daemon
 // ViewMsg.favorites 原序全量展示，空则整节隐藏），行点击经
 // statusbar.js 生成的跳转脚本本地执行（hyprctl 聚焦 + tmux 切换/拉起），

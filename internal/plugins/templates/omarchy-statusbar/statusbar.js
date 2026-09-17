@@ -10,12 +10,14 @@
 // pid(0=未知)/tmuxPane(空=不在 tmux)/tmuxSession(形如 "$29")。
 
 // 栏上状态展示顺序（固定）：ERROR → PERMISSION(ASK) → RETRY → BUSY。
-// IDLE/UNKNOWN/ARCHIVED 不上栏。
+// IDLE/UNKNOWN/ARCHIVED 不上栏。配色对齐 herdr：红=需要你（ERROR/
+// PERMISSION 同为 herdr blocked 语义），橙=带故障重试（红黄之间），
+// 黄=运行中（herdr working）。
 var STATUS_GROUPS = [
   ["ERROR", "🔴"],
-  ["PERMISSION", "🟡"],
+  ["PERMISSION", "🔴"],
   ["RETRY", "🟠"],
-  ["BUSY", "🔵"],
+  ["BUSY", "🟡"],
 ]
 
 // 栏上计数用的状态集合（非 IDLE 且非忽略态）。

@@ -29,7 +29,7 @@ function sess(id: string, over: Record<string, any> = {}): Record<string, any> {
 describe("STATUS_GROUPS", () => {
   test("固定顺序 ERROR→PERMISSION→RETRY→BUSY，图标一一对应", () => {
     expect(STATUS_GROUPS.map((g: any[]) => g[0])).toEqual(["ERROR", "PERMISSION", "RETRY", "BUSY"]);
-    expect(STATUS_GROUPS.map((g: any[]) => g[1])).toEqual(["🔴", "🟡", "🟠", "🔵"]);
+    expect(STATUS_GROUPS.map((g: any[]) => g[1])).toEqual(["🔴", "🔴", "🟠", "🟡"]);
   });
 });
 
@@ -79,7 +79,7 @@ describe("groupCounts", () => {
     ]);
     expect(out).toEqual([
       { key: "ERROR", icon: "🔴", n: 1 },
-      { key: "BUSY", icon: "🔵", n: 2 },
+      { key: "BUSY", icon: "🟡", n: 2 },
     ]);
   });
   test("四类齐全时保持定序", () => {
