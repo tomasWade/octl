@@ -1610,24 +1610,32 @@ func (sm *StateManager) processEvent(raw []byte) {
 		// opencode 的 question 工具：agent 向用户提问并阻塞等待回答。该等待态
 		// 不体现在 session.status（只有 idle/retry/busy 三种），只能靠本事件感知。
 		// 与权限确认同义复用 PERMISSION（UI 统一显示 🟡 ASK，等待用户处理）。
+		// 事件 payload = Request{id, sessionID, questions[], tool?}（opencode
+		// packages/schema/src/v1/question.ts）；questions 带完整问题文本与选项，
+		// 捕获进 Question* 字段供订阅者（away-notify）直接消费，旧订阅者忽略。
 		sid := eventSID(evt)
 		if sid == "" {
 			return
 		}
+		qID := eventStr(evt, "id")
+		qText, qOpts := eventQuestions(evt)
 		seen := time.Now()
 		sm.mu.Lock()
 		state := sm.getOrCreateState(sid)
 		state.Status = StatusPermission
 		state.Source = SourceEvent
 		state.LastEventAt = seen
+		state.QuestionID = qID
+		state.QuestionText = qText
+		state.QuestionOptions = qOpts
 		state.Tombstone = false
 		sm.updateProcessInfo(sid, eventPID(evt), eventStr(evt, "tmuxPane"), eventStr(evt, "tmuxSession"), seen)
 		sm.mu.Unlock()
 
 	case "permission.replied", "question.replied", "question.rejected":
 		// 权限已确认 / 提问已回答或被忽略后 agent 继续生成，先标记 BUSY；
-		// 若实际转入空闲，后续 session.idle 事件会修正。question 路径没有
-		// PermType/PermTitle，清空操作是幂等无害的。
+		// 若实际转入空闲，后续 session.idle 事件会修正。question 路径的
+		// PermType/PermTitle/Question* 清空操作是幂等无害的。
 		sid := eventSID(evt)
 		if sid == "" {
 			return
@@ -1640,6 +1648,9 @@ func (sm *StateManager) processEvent(raw []byte) {
 		state.LastEventAt = seen
 		state.PermType = ""
 		state.PermTitle = ""
+		state.QuestionID = ""
+		state.QuestionText = ""
+		state.QuestionOptions = nil
 		state.Tombstone = false
 		sm.updateProcessInfo(sid, eventPID(evt), eventStr(evt, "tmuxPane"), eventStr(evt, "tmuxSession"), seen)
 		sm.mu.Unlock()
@@ -1714,6 +1725,62 @@ func eventStr(evt rawEvent, key string) string {
 		return s
 	}
 	return strProp(evt.RawTop, key)
+}
+
+// eventQuestions 解析 question.asked 事件的 questions 数组（properties 优先，
+// 顶层回落），产出扁平的文本与选项表示：
+//   - 单问：text = 问题原文；options = 各选项 label
+//   - 多问：text = "Q1: …；Q2: …"；options 每项 = "Q1[label1/label2]"
+//
+// 结构损坏或缺 questions 时返回空串/nil——状态仍会置为 PERMISSION（问了个
+// 什么不知道，比假装没问强）。不截断：数据层保真，展示端（通知文案）自裁。
+func eventQuestions(evt rawEvent) (string, []string) {
+	var raw interface{}
+	if v, ok := evt.Properties["questions"]; ok {
+		raw = v
+	} else if v, ok := evt.RawTop["questions"]; ok {
+		raw = v
+	}
+	arr, ok := raw.([]interface{})
+	if !ok || len(arr) == 0 {
+		return "", nil
+	}
+	multi := len(arr) > 1
+	var texts, options []string
+	for i, q := range arr {
+		m, ok := q.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		qText, _ := m["question"].(string)
+		if qText == "" {
+			continue
+		}
+		if multi {
+			texts = append(texts, fmt.Sprintf("Q%d: %s", i+1, qText))
+		} else {
+			texts = append(texts, qText)
+		}
+		var labels []string
+		if opts, ok := m["options"].([]interface{}); ok {
+			for _, o := range opts {
+				if om, ok := o.(map[string]interface{}); ok {
+					if l, _ := om["label"].(string); l != "" {
+						labels = append(labels, l)
+					}
+				}
+			}
+		}
+		if len(labels) == 0 {
+			continue
+		}
+		if multi {
+			options = append(options, fmt.Sprintf("Q%d[%s]", i+1, strings.Join(labels, "/")))
+		} else {
+			options = append(options, labels...)
+		}
+	}
+	return strings.Join(texts, "；"), options
 }
 
 // eventStatusType extracts the status type from a session.status event,

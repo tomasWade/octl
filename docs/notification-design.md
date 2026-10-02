@@ -259,13 +259,18 @@ func deriveFromDB(s types.Session, db *DB) SessionStatus {
 - 动作：清 `PermInfo, status → BUSY`
 
 ### 8. `question.asked`
-- 入参：`{ id, sessionID, ... }`
-- 动作：写 `status = PERMISSION`（与权限确认同义复用，UI 统一显示 🟡 ASK）
-- 说明：opencode question 工具（agent 提问并阻塞等待回答），该等待态**不会**体现在 `session.status`（只有 idle/retry/busy），只能靠本事件感知
+- 入参：`{ id, sessionID, questions[], tool? }`（opencode schema `packages/schema/src/v1/question.ts` 的 Request；questions 带完整问题文本与选项）
+- 动作：写 `status = PERMISSION`（与权限确认同义复用，UI 统一显示 🟡 ASK）；捕获
+  `QuestionID`（que_… 请求锚点）、`QuestionText`（多问拼 "Q1: …；Q2: …"）、
+  `QuestionOptions`（选项 label；多问按 "Q1[label1/label2]" 分组）
+- 兼容性：均为 JSON 附加字段（omitempty），旧订阅者按未知键忽略；`ProtocolMD5`
+  只哈希插件模板不含 wire 类型，故不 bump——现有 hook/sidebar 无拒连无重启提示
+- 说明：opencode question 工具（agent 提问并阻塞等待回答），该等待态**不会**体现在 `session.status`（只有 idle/retry/busy），只能靠本事件感知。结构损坏的 questions 字段留空、状态仍置 PERMISSION——"问了个不知道"比"假装没问"强。消费方：`hooks/octl-away-notify/`（出门通知）
 
 ### 9. `question.replied` / `question.rejected`
 - 入参：`{ sessionID, requestID }`
-- 动作：`status → BUSY`（agent 继续生成；若转入空闲由后续 `session.idle` 修正）
+- 动作：`status → BUSY`（agent 继续生成；若转入空闲由后续 `session.idle` 修正）；
+  Question\* 与 Perm\* 一并幂等清空
 
 ### 10. `session.compacted` (可选)
 - 入参：`{ sessionID }`

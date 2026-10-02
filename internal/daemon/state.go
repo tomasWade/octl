@@ -41,6 +41,11 @@ type stuckRecord struct {
 	ErrorMsg  string `json:"errorMsg,omitempty"`
 	PermType  string `json:"permType,omitempty"`
 	PermTitle string `json:"permTitle,omitempty"`
+	// question.* 捕获的提问内容（附加字段，question 路径专用；旧 state.json
+	// 无这些键，反序列化为零值，天然兼容）。schema 版本不 bump：均为 omitempty。
+	QuestionID      string   `json:"questionId,omitempty"`
+	QuestionText    string   `json:"questionText,omitempty"`
+	QuestionOptions []string `json:"questionOptions,omitempty"`
 }
 
 // processRecord 是单个 session 的进程附着信息持久化条目。
@@ -99,11 +104,14 @@ func (sm *StateManager) saveState() {
 	for _, e := range sm.stateMap {
 		if e.Status == StatusPermission || e.Status == StatusError {
 			st.Stuck = append(st.Stuck, stuckRecord{
-				SessionID: e.SessionID,
-				Status:    string(e.Status),
-				ErrorMsg:  e.ErrorMsg,
-				PermType:  e.PermType,
-				PermTitle: e.PermTitle,
+				SessionID:      e.SessionID,
+				Status:         string(e.Status),
+				ErrorMsg:       e.ErrorMsg,
+				PermType:       e.PermType,
+				PermTitle:      e.PermTitle,
+				QuestionID:     e.QuestionID,
+				QuestionText:   e.QuestionText,
+				QuestionOptions: append([]string(nil), e.QuestionOptions...),
 			})
 		}
 	}
@@ -221,6 +229,9 @@ func (sm *StateManager) restoreState() {
 		e.ErrorMsg = r.ErrorMsg
 		e.PermType = r.PermType
 		e.PermTitle = r.PermTitle
+		e.QuestionID = r.QuestionID
+		e.QuestionText = r.QuestionText
+		e.QuestionOptions = append([]string(nil), r.QuestionOptions...)
 		e.Source = SourceEvent
 		e.LastEventAt = time.UnixMilli(savedAt)
 		stuckRestored++

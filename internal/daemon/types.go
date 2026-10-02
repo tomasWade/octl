@@ -58,7 +58,12 @@ type SessionState struct {
 	ErrorMsg    string        `json:"errorMsg,omitempty"`
 	PermType    string        `json:"permType,omitempty"`  // "bash" | "file_write" | ...
 	PermTitle   string        `json:"permTitle,omitempty"` // e.g. "Run bash: npm test"
-	Tombstone   bool          `json:"-"`                   // Internal: marked for deletion
+	// question.asked 捕获的提问内容（opencode schema v1/question.ts Request.questions）。
+	// 附加字段：旧订阅者按未知 JSON 字段忽略，无需处理；permission 路径恒为空。
+	QuestionID      string   `json:"questionId,omitempty"`      // que_… 请求锚点（未来编程应答用）
+	QuestionText    string   `json:"questionText,omitempty"`    // 问题文本；多问时 "Q1: …；Q2: …"
+	QuestionOptions []string `json:"questionOptions,omitempty"` // 选项 label；多问时 "Q1[label1/label2]"
+	Tombstone       bool     `json:"-"`                         // Internal: marked for deletion
 }
 
 // SidebarSession represents a single session shown in the OpenCode sidebar.
