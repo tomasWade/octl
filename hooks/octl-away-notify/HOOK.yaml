@@ -1,0 +1,19 @@
+name: octl-away-notify
+description: 订阅 octl 快照，会话卡审批/提问时推送飞书（中央机直发 / 卫星机经 peer 报告）
+events:
+  - gateway:startup
+
+# ---- away-notify 配置（handler 自行解析顶层键；改后重启 gateway 生效）----
+# machine:        本机限定符，用于通知锚点与跨机区分（如 mini / laptop）
+# role:           central=查 away_flag 后 hermes send 直发；satellite=peer dm 报告中央（由中央过滤）
+# feishu_target:  central 专用，hermes send 的 -t 目标
+# away_flag:      central 专用，出门标志文件；存在才发送（在家冬眠）
+# report_peer:    satellite 专用，hermes peer 里注册的中央机名
+# hermes_bin / octl_socket: 可覆盖路径
+machine: mini
+role: central
+feishu_target: feishu:oc_b2f96b7347b44a289bbf5f02b5d32b5c
+away_flag: ~/.hermes/state/away.flag
+hermes_bin: ~/.local/bin/hermes
+octl_socket: ~/.local/share/octl/octl.sock
+notify_error: "false"
