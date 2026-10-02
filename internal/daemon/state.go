@@ -104,13 +104,13 @@ func (sm *StateManager) saveState() {
 	for _, e := range sm.stateMap {
 		if e.Status == StatusPermission || e.Status == StatusError {
 			st.Stuck = append(st.Stuck, stuckRecord{
-				SessionID:      e.SessionID,
-				Status:         string(e.Status),
-				ErrorMsg:       e.ErrorMsg,
-				PermType:       e.PermType,
-				PermTitle:      e.PermTitle,
-				QuestionID:     e.QuestionID,
-				QuestionText:   e.QuestionText,
+				SessionID:       e.SessionID,
+				Status:          string(e.Status),
+				ErrorMsg:        e.ErrorMsg,
+				PermType:        e.PermType,
+				PermTitle:       e.PermTitle,
+				QuestionID:      e.QuestionID,
+				QuestionText:    e.QuestionText,
 				QuestionOptions: append([]string(nil), e.QuestionOptions...),
 			})
 		}
