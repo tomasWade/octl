@@ -138,6 +138,7 @@ Panel {
       if (root.versionRejected || sock.connected) return
       root.retryDelayMs = Math.min(root.retryDelayMs * 2, 30000)
       sock.connected = true
+      retryTimer.restart()
     }
   }
 
